@@ -52,11 +52,6 @@ setInterval(() => {
   }
 }, 60000);
 
-// ============ LEAD STORAGE ============
-const leadsDB = [];
-const requestsDB = [];
-const adsDB = [];
-
 // ============ MIDDLEWARE ============
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -74,35 +69,18 @@ app.use((req, res, next) => {
   next();
 });
 
-const isAuthenticated = (req, res, next) => {
-  if (!req.isAuthenticated()) {
-    log.warn("Unauthorized access attempt", {
-      sessionId: req.sessionID || "No session",
-      ip: req.ip,
-      url: req.url
-    });
-    
-    return res.status(401).json({
-      success: false,
-      message: "Authentication required. Please login first.",
-      timestamp: new Date().toISOString()
-    });
-  }
-  next();
-};
-
-// ============ SESSION CONFIGURATION ============
+// ============ FIXED SESSION CONFIGURATION FOR RENDER ============
 app.use(
   session({ 
     secret: CONFIG.SESSION_SECRET, 
-    resave: false,
-    saveUninitialized: false,
+    resave: true,  // Changed to true
+    saveUninitialized: true,  // Changed to true
     cookie: {
-      secure: true,
+      secure: false,  // MUST be false for Render (they handle SSL at load balancer)
       httpOnly: true,
       maxAge: 24 * 60 * 60 * 1000,
-      sameSite: 'lax',
-      domain: '.onrender.com'
+      sameSite: 'lax'
+      // Removed domain - let it be set automatically
     }
   })
 );
@@ -127,7 +105,7 @@ passport.deserializeUser((obj, done) => {
   done(null, obj);
 });
 
-// Facebook Strategy with ONLY default permissions
+// Facebook Strategy
 passport.use(
   new FacebookStrategy(
     {
@@ -159,11 +137,10 @@ passport.use(
         return done(null, false, { message: "Authorization code already used" });
       }
       
-      req.session.facebookAccessToken = accessToken;
-      
       if (req.session) {
         req.session.usedAuthCode = true;
         req.session.userProfile = profile;
+        req.session.facebookAccessToken = accessToken;
       }
 
       log.success("User authenticated successfully", {
@@ -194,48 +171,30 @@ app.get("/", (req, res) => {
       "GET /profile - Get authenticated user",
       "GET /logout - Logout user",
       "GET /auth/reset-session - Reset session",
-      "=== LEAD MANAGEMENT ===",
       "POST /leads - Create a new lead",
       "GET /leads - Get all leads",
-      "GET /leads/:id - Get a specific lead",
-      "PUT /leads/:id - Update a lead",
-      "DELETE /leads/:id - Delete a lead",
-      "=== REQUEST MANAGEMENT ===",
       "POST /requests - Create a new request",
       "GET /requests - Get all requests",
-      "GET /requests/:id - Get a specific request",
-      "PUT /requests/:id - Update a request",
-      "DELETE /requests/:id - Delete a request",
-      "=== AD MANAGEMENT ===",
       "POST /ads - Create a new ad",
-      "GET /ads - Get all ads",
-      "GET /ads/:id - Get a specific ad",
-      "PUT /ads/:id - Update an ad",
-      "DELETE /ads/:id - Delete an ad"
+      "GET /ads - Get all ads"
     ]
   });
 });
 
-// Initiate Facebook login with ONLY default permissions
+// Initiate Facebook login
 app.get("/auth/facebook", (req, res, next) => {
-  log.auth("Initiating Facebook login with default permissions", {
+  log.auth("Initiating Facebook login", {
     userAgent: req.get('User-Agent'),
     ip: req.ip,
     sessionId: req.sessionID || "No session"
   });
   
-  req.session.loginInitiated = Date.now();
-  
   passport.authenticate("facebook", { 
-    scope: [
-      "email",
-      "public_profile"
-      // Only these default permissions work without App Review
-    ]
+    scope: ["email", "public_profile"]
   })(req, res, next);
 });
 
-// Facebook OAuth callback
+// Facebook OAuth callback - FIXED
 app.get(
   "/auth/facebook/callback",
   (req, res, next) => {
@@ -245,11 +204,13 @@ app.get(
       hasCode: !!code,
       hasState: !!req.query.state,
       sessionId: req.sessionID || "No session",
-      hasCookies: !!req.headers.cookie
+      hasCookies: !!req.headers.cookie,
+      cookies: req.headers.cookie || "None"
     });
     
+    // Check if this code was already used globally
     if (code && usedCodes.has(code)) {
-      log.warn("Duplicate authorization code detected globally", { 
+      log.warn("Duplicate authorization code detected", { 
         code: code.substring(0, 20) + '...' 
       });
       return res.status(400).json({
@@ -259,15 +220,9 @@ app.get(
       });
     }
     
+    // Store the code as used
     if (code) {
       usedCodes.set(code, Date.now());
-    }
-    
-    if (req.session && req.session.usedAuthCode) {
-      log.warn("Session already used an auth code", {
-        sessionId: req.sessionID
-      });
-      return res.redirect("/login-failed?reason=code_already_used");
     }
     
     next();
@@ -286,8 +241,6 @@ app.get(
       sessionId: req.sessionID
     });
 
-    req.session.usedAuthCode = true;
-    
     res.json({
       success: true,
       message: "Authentication successful",
@@ -304,13 +257,22 @@ app.get(
 );
 
 // ============ LEAD MANAGEMENT ============
+const leadsDB = [];
+const requestsDB = [];
+const adsDB = [];
+
+const isAuthenticated = (req, res, next) => {
+  if (!req.isAuthenticated()) {
+    return res.status(401).json({
+      success: false,
+      message: "Authentication required. Please login first.",
+      timestamp: new Date().toISOString()
+    });
+  }
+  next();
+};
 
 app.post("/leads", isAuthenticated, (req, res) => {
-  log.lead("Creating new lead", {
-    user: req.user.displayName,
-    userId: req.user.id
-  });
-
   const { name, email, phone, source, status, notes } = req.body;
   
   if (!name || !email) {
@@ -338,8 +300,6 @@ app.post("/leads", isAuthenticated, (req, res) => {
 
   leadsDB.push(newLead);
   
-  log.success("Lead created successfully", { leadId: newLead.id });
-  
   res.status(201).json({
     success: true,
     message: "Lead created successfully",
@@ -349,11 +309,6 @@ app.post("/leads", isAuthenticated, (req, res) => {
 });
 
 app.get("/leads", isAuthenticated, (req, res) => {
-  log.lead("Fetching all leads", {
-    user: req.user.displayName,
-    totalLeads: leadsDB.length
-  });
-
   res.json({
     success: true,
     total: leadsDB.length,
@@ -896,12 +851,10 @@ app.listen(CONFIG.PORT, () => {
   console.log(`🌐 Environment: ${CONFIG.ENVIRONMENT}`);
   console.log(`🔄 Callback URL: ${CONFIG.CALLBACK_URL}`);
   console.log(`🔑 Facebook App ID: ${CONFIG.FACEBOOK_APP_ID}`);
-  console.log(`📋 Permissions: email, public_profile (default - no App Review needed)`);
-  console.log(`👤 Lead Management: Enabled (internal)`);
-  console.log(`📋 Request Management: Enabled (internal)`);
-  console.log(`📢 Ad Management: Enabled (internal)`);
+  console.log(`🍪 Cookie Settings: secure=false (Render handles SSL)`);
+  console.log(`📋 Permissions: email, public_profile`);
   console.log("=".repeat(60));
-  console.log(`[${new Date().toISOString()}] ✅ Server is ready to handle requests`);
+  console.log(`[${new Date().toISOString()}] ✅ Server is ready`);
   console.log("=".repeat(60));
 });
 
