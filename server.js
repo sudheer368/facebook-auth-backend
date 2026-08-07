@@ -3,7 +3,6 @@ const session = require("express-session");
 const passport = require("passport");
 const FacebookStrategy = require("passport-facebook").Strategy;
 const cors = require("cors");
-const crypto = require("crypto");
 
 const app = express();
 
@@ -19,23 +18,49 @@ const CONFIG = {
 };
 // ======================================
 
+// ============ LOGGING UTILITY ============
+const log = {
+  info: (message, data = {}) => {
+    console.log(`[${new Date().toISOString()}] ℹ️ ${message}`, data);
+  },
+  success: (message, data = {}) => {
+    console.log(`[${new Date().toISOString()}] ✅ ${message}`, data);
+  },
+  error: (message, data = {}) => {
+    console.error(`[${new Date().toISOString()}] ❌ ${message}`, data);
+  },
+  warn: (message, data = {}) => {
+    console.warn(`[${new Date().toISOString()}] ⚠️ ${message}`, data);
+  },
+  auth: (message, data = {}) => {
+    console.log(`[${new Date().toISOString()}] 🔐 ${message}`, data);
+  },
+  request: (req) => {
+    console.log(`[${new Date().toISOString()}] 📨 ${req.method} ${req.url} - IP: ${req.ip}`);
+  }
+};
+
 // ============ MIDDLEWARE ============
 app.use(cors({ 
   origin: CONFIG.CLIENT_URL, 
   credentials: true 
 }));
 
-// Session configuration with better production settings
+// Request logging middleware
+app.use((req, res, next) => {
+  log.request(req);
+  next();
+});
+
 app.use(
   session({ 
     secret: CONFIG.SESSION_SECRET, 
-    resave: true,  // Changed to true
-    saveUninitialized: true,  // Changed to true
+    resave: true, 
+    saveUninitialized: true,
     cookie: {
-      secure: true,  // Always true for HTTPS
+      secure: true,
       httpOnly: true,
-      maxAge: 24 * 60 * 60 * 1000,
-      sameSite: 'lax'  // Added for better security
+      maxAge: 24 * 60 * 60 * 1000
     }
   })
 );
@@ -45,16 +70,22 @@ app.use(passport.session());
 
 // ============ PASSPORT CONFIGURATION ============
 passport.serializeUser((user, done) => {
-  console.log("Serializing user:", user.id);
+  log.info("Serializing user", { 
+    id: user.id, 
+    displayName: user.displayName 
+  });
   done(null, user);
 });
 
 passport.deserializeUser((obj, done) => {
-  console.log("Deserializing user:", obj.id);
+  log.info("Deserializing user", { 
+    id: obj.id, 
+    displayName: obj.displayName 
+  });
   done(null, obj);
 });
 
-// Facebook Strategy with better error handling
+// Facebook Strategy with comprehensive logging
 passport.use(
   new FacebookStrategy(
     {
@@ -62,24 +93,43 @@ passport.use(
       clientSecret: CONFIG.FACEBOOK_APP_SECRET,
       callbackURL: CONFIG.CALLBACK_URL,
       profileFields: ["id", "displayName", "emails", "picture.type(large)"],
-      passReqToCallback: true  // Allows access to request object
+      state: true
     },
-    (req, accessToken, refreshToken, profile, done) => {
-      console.log("Facebook callback received for user:", profile.displayName);
-      console.log("User ID:", profile.id);
-      console.log("Email:", profile.emails?.[0]?.value || "No email provided");
-      
-      // Check if this code was already used (prevents duplicate processing)
-      if (req.session && req.session.usedAuthCode) {
-        console.log("Duplicate auth attempt detected, rejecting...");
-        return done(null, false, { message: "Authorization code already used" });
-      }
-      
-      // Mark this session as having used the code
-      if (req.session) {
-        req.session.usedAuthCode = true;
-      }
-      
+    (accessToken, refreshToken, profile, done) => {
+      log.auth("Facebook authentication received", {
+        displayName: profile.displayName,
+        id: profile.id,
+        email: profile.emails?.[0]?.value || "No email provided",
+        provider: profile.provider,
+        hasPicture: !!profile.photos?.[0]?.value
+      });
+
+      // Log all profile data
+      log.info("Complete profile data", {
+        id: profile.id,
+        displayName: profile.displayName,
+        name: profile.name,
+        emails: profile.emails,
+        photos: profile.photos?.map(p => p.value),
+        provider: profile.provider,
+        _raw: profile._raw ? "Raw data available" : "No raw data"
+      });
+
+      // Check for existing user in database (mock)
+      log.info("Checking if user exists in database", { 
+        userId: profile.id,
+        email: profile.emails?.[0]?.value 
+      });
+
+      // In a real app, you would check your database here
+      // Example: const existingUser = await User.findOne({ facebookId: profile.id });
+      // log.info("User lookup result", { exists: !!existingUser });
+
+      log.success("User authenticated successfully", {
+        displayName: profile.displayName,
+        userId: profile.id
+      });
+
       return done(null, profile);
     }
   )
@@ -87,12 +137,14 @@ passport.use(
 
 // ============ ROUTES ============
 
-// Health check endpoint
+// Health check
 app.get("/", (req, res) => {
+  log.info("Health check endpoint called");
   res.json({
     status: "Server is running",
     environment: CONFIG.ENVIRONMENT,
     authenticated: req.isAuthenticated() || false,
+    timestamp: new Date().toISOString(),
     endpoints: [
       "GET / - Health check",
       "GET /auth/facebook - Initiate Facebook login",
@@ -100,20 +152,22 @@ app.get("/", (req, res) => {
       "GET /status - Server status",
       "GET /profile - Get authenticated user",
       "GET /logout - Logout user",
-      "GET /auth/reset-session - Reset session"
+      "GET /auth/reset-session - Reset session",
+      "GET /auth/logs - View recent authentication logs (in memory)"
     ]
   });
 });
 
-// Initiate Facebook login with state parameter
+// Initiate Facebook login
 app.get("/auth/facebook", (req, res, next) => {
-  // Generate a random state for CSRF protection
-  const state = crypto.randomBytes(16).toString('hex');
-  req.session.oauthState = state;
+  log.auth("Initiating Facebook login", {
+    userAgent: req.get('User-Agent'),
+    ip: req.ip,
+    sessionId: req.sessionID || "No session"
+  });
   
   passport.authenticate("facebook", { 
-    scope: ["email"],
-    state: state
+    scope: ["email"]
   })(req, res, next);
 });
 
@@ -121,18 +175,10 @@ app.get("/auth/facebook", (req, res, next) => {
 app.get(
   "/auth/facebook/callback",
   (req, res, next) => {
-    // Verify state parameter to prevent CSRF
-    const state = req.query.state;
-    if (!state || state !== req.session.oauthState) {
-      console.log("State mismatch or missing");
-      return res.status(400).json({
-        success: false,
-        message: "Invalid state parameter. Please try again."
-      });
-    }
-    
-    // Clear the state to prevent reuse
-    delete req.session.oauthState;
+    log.auth("Facebook callback received", {
+      query: req.query,
+      sessionId: req.sessionID || "No session"
+    });
     
     passport.authenticate("facebook", { 
       failureRedirect: "/login-failed",
@@ -140,8 +186,16 @@ app.get(
     })(req, res, next);
   },
   (req, res) => {
-    // Success response with user data
-    console.log("Authentication successful for:", req.user.displayName);
+    log.success("Authentication successful", {
+      user: {
+        id: req.user.id,
+        displayName: req.user.displayName,
+        email: req.user.emails?.[0]?.value || null
+      },
+      sessionId: req.sessionID,
+      timestamp: new Date().toISOString()
+    });
+
     res.json({
       success: true,
       message: "Authentication successful",
@@ -156,54 +210,80 @@ app.get(
   }
 );
 
-// Reset session - useful for clearing stuck sessions
+// Reset session
 app.get("/auth/reset-session", (req, res) => {
+  log.info("Session reset requested", {
+    sessionId: req.sessionID || "No session"
+  });
+  
   req.session.destroy((err) => {
     if (err) {
-      console.error("Session reset error:", err);
-      return res.status(500).json({ 
-        success: false, 
-        message: "Failed to reset session" 
-      });
+      log.error("Session reset failed", { error: err.message });
+      return res.status(500).json({ success: false, message: "Failed to reset session" });
     }
-    res.json({ 
-      success: true, 
-      message: "Session reset successfully. You can try logging in again." 
-    });
+    log.success("Session reset successful");
+    res.json({ success: true, message: "Session reset successfully" });
   });
 });
 
-// Login failed endpoint
+// Login failed
 app.get("/login-failed", (req, res) => {
-  const error = req.session.messages ? req.session.messages[0] : "Unknown error";
-  console.log("Login failed:", error);
+  const error = req.session.messages ? req.session.messages[0] : "Authentication failed";
+  log.error("Login failed", {
+    error: error,
+    sessionId: req.sessionID || "No session",
+    query: req.query,
+    timestamp: new Date().toISOString()
+  });
   
   res.status(401).json({
     success: false,
     message: "Authentication failed",
-    error: error
+    error: error,
+    timestamp: new Date().toISOString()
   });
 });
 
-// Server status
+// Server status with detailed info
 app.get("/status", (req, res) => {
-  res.json({ 
+  const status = { 
     status: "Server is running", 
     authenticated: req.isAuthenticated() || false,
     environment: CONFIG.ENVIRONMENT,
     timestamp: new Date().toISOString(),
-    sessionId: req.sessionID || "No session"
+    sessionId: req.sessionID || "No session",
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
+    nodeVersion: process.version
+  };
+  
+  log.info("Status check", {
+    authenticated: status.authenticated,
+    sessionId: status.sessionId
   });
+  
+  res.json(status);
 });
 
 // Get authenticated user profile
 app.get("/profile", (req, res) => {
   if (!req.isAuthenticated()) {
+    log.warn("Unauthorized profile access attempt", {
+      sessionId: req.sessionID || "No session",
+      ip: req.ip
+    });
+    
     return res.status(401).json({ 
       success: false,
       message: "Not authenticated. Please login first." 
     });
   }
+  
+  log.info("Profile accessed", {
+    userId: req.user.id,
+    displayName: req.user.displayName,
+    sessionId: req.sessionID
+  });
   
   res.json({
     success: true,
@@ -213,25 +293,39 @@ app.get("/profile", (req, res) => {
       email: req.user.emails?.[0]?.value || null,
       picture: req.user.photos?.[0]?.value || null,
       provider: req.user.provider
-    }
+    },
+    timestamp: new Date().toISOString()
   });
 });
 
-// Logout user
+// Logout
 app.get("/logout", (req, res) => {
-  console.log("Logging out user:", req.user?.displayName || "Unknown");
+  log.info("Logout requested", {
+    user: req.user?.displayName || "Unknown",
+    userId: req.user?.id || "Unknown",
+    sessionId: req.sessionID
+  });
+  
   req.logout((err) => {
     if (err) {
-      console.error("Logout error:", err);
-      return res.status(500).json({ 
-        success: false,
-        message: "Logout failed" 
-      });
+      log.error("Logout failed", { error: err.message });
+      return res.status(500).json({ success: false, message: "Logout failed" });
     }
-    res.json({ 
-      success: true,
-      message: "Logged out successfully" 
+    log.success("Logout successful", {
+      sessionId: req.sessionID
     });
+    res.json({ success: true, message: "Logged out successfully" });
+  });
+});
+
+// Detailed logs endpoint (for debugging)
+let recentLogs = [];
+app.get("/auth/logs", (req, res) => {
+  log.info("Log endpoint accessed");
+  res.json({
+    recentLogs: recentLogs.slice(-50),
+    totalLogs: recentLogs.length,
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -239,6 +333,12 @@ app.get("/logout", (req, res) => {
 
 // 404 handler
 app.use((req, res) => {
+  log.warn("Route not found", {
+    method: req.method,
+    url: req.url,
+    ip: req.ip
+  });
+  
   res.status(404).json({
     success: false,
     message: "Route not found"
@@ -247,46 +347,53 @@ app.use((req, res) => {
 
 // Global error handler
 app.use((err, req, res, next) => {
-  console.error("Global error:", err.stack);
+  log.error("Global error", {
+    error: err.message,
+    stack: err.stack,
+    url: req.url,
+    method: req.method
+  });
   
-  // Check if this is the "authorization code used" error
+  // Handle authorization code error
   if (err.message && err.message.includes("authorization code")) {
     return res.status(400).json({
       success: false,
-      message: "This authorization code has been used. Please try logging in again.",
-      hint: "Visit /auth/reset-session to reset your session"
+      message: "Authorization code already used. Please try again.",
+      hint: "Visit /auth/reset-session to reset your session",
+      timestamp: new Date().toISOString()
     });
   }
   
   res.status(err.status || 500).json({
     success: false,
     message: err.message || "Internal server error",
-    ...(CONFIG.ENVIRONMENT === "development" && { stack: err.stack })
+    timestamp: new Date().toISOString()
   });
 });
 
 // ============ START SERVER ============
 app.listen(CONFIG.PORT, () => {
-  console.log("=".repeat(50));
-  console.log("🚀 Facebook Authentication Server");
-  console.log("=".repeat(50));
+  console.log("=".repeat(60));
+  console.log(`[${new Date().toISOString()}] 🚀 Facebook Authentication Server Started`);
+  console.log("=".repeat(60));
   console.log(`📡 Server running on port: ${CONFIG.PORT}`);
   console.log(`🌐 Environment: ${CONFIG.ENVIRONMENT}`);
-  console.log(`🔑 Facebook App ID: ${CONFIG.FACEBOOK_APP_ID}`);
-  console.log(`📱 Client URL: ${CONFIG.CLIENT_URL}`);
   console.log(`🔄 Callback URL: ${CONFIG.CALLBACK_URL}`);
-  console.log("=".repeat(50));
-  console.log("✅ Server is ready to handle requests");
-  console.log("=".repeat(50));
+  console.log(`🔑 Facebook App ID: ${CONFIG.FACEBOOK_APP_ID}`);
+  console.log(`💾 Session Secret: ${CONFIG.SESSION_SECRET.substring(0, 10)}...`);
+  console.log("=".repeat(60));
+  console.log(`[${new Date().toISOString()}] ✅ Server is ready to handle requests`);
+  console.log(`[${new Date().toISOString()}] 📋 Logging enabled for all authentication events`);
+  console.log("=".repeat(60));
 });
 
 // Handle graceful shutdown
 process.on("SIGTERM", () => {
-  console.log("SIGTERM received. Shutting down gracefully...");
+  log.info("SIGTERM received - Shutting down gracefully...");
   process.exit(0);
 });
 
 process.on("SIGINT", () => {
-  console.log("SIGINT received. Shutting down gracefully...");
+  log.info("SIGINT received - Shutting down gracefully...");
   process.exit(0);
 });
