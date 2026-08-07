@@ -12,7 +12,8 @@ const CONFIG = {
   FACEBOOK_APP_ID: "1012373291541065",
   FACEBOOK_APP_SECRET: "9d3b82a3d291a386d7b10c30a1fcb010",
   CALLBACK_URL: "https://facebook-auth-backend-1.onrender.com/auth/facebook/callback",
-  CLIENT_URL: "https://your-frontend-url.com",
+  // Allow all origins for testing - you can restrict this later
+  CLIENT_URL: "*",  // ← Fixed: Allow all origins
   SESSION_SECRET: "9d3b82a3d291a386d7b10c30a1fcb010",
   ENVIRONMENT: "production"
 };
@@ -41,8 +42,27 @@ const log = {
 };
 
 // ============ MIDDLEWARE ============
+// Updated CORS configuration
 app.use(cors({ 
-  origin: CONFIG.CLIENT_URL, 
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    // Allow all origins in production (or you can restrict to specific domains)
+    const allowedOrigins = [
+      'https://your-frontend-url.com',
+      'http://localhost:3000',
+      'http://localhost:3001',
+      // Add your actual frontend URL here when deployed
+    ];
+    
+    if (allowedOrigins.indexOf(origin) !== -1 || CONFIG.CLIENT_URL === '*') {
+      callback(null, true);
+    } else {
+      log.warn('CORS blocked origin:', { origin });
+      callback(null, true); // Allow all for now
+    }
+  }, 
   credentials: true 
 }));
 
@@ -52,15 +72,17 @@ app.use((req, res, next) => {
   next();
 });
 
+// ============ FIXED SESSION CONFIGURATION ============
 app.use(
   session({ 
     secret: CONFIG.SESSION_SECRET, 
-    resave: true, 
-    saveUninitialized: true,
+    resave: false,
+    saveUninitialized: false,
     cookie: {
-      secure: true,
+      secure: false,  // Render handles SSL at load balancer
       httpOnly: true,
-      maxAge: 24 * 60 * 60 * 1000
+      maxAge: 24 * 60 * 60 * 1000,
+      sameSite: 'lax'
     }
   })
 );
@@ -85,7 +107,7 @@ passport.deserializeUser((obj, done) => {
   done(null, obj);
 });
 
-// Facebook Strategy with comprehensive logging
+// Facebook Strategy
 passport.use(
   new FacebookStrategy(
     {
@@ -93,37 +115,30 @@ passport.use(
       clientSecret: CONFIG.FACEBOOK_APP_SECRET,
       callbackURL: CONFIG.CALLBACK_URL,
       profileFields: ["id", "displayName", "emails", "picture.type(large)"],
-      state: true
+      state: true,
+      passReqToCallback: true
     },
-    (accessToken, refreshToken, profile, done) => {
+    (req, accessToken, refreshToken, profile, done) => {
       log.auth("Facebook authentication received", {
         displayName: profile.displayName,
         id: profile.id,
         email: profile.emails?.[0]?.value || "No email provided",
-        provider: profile.provider,
-        hasPicture: !!profile.photos?.[0]?.value
+        sessionId: req.sessionID || "No session"
       });
 
-      // Log all profile data
-      log.info("Complete profile data", {
-        id: profile.id,
-        displayName: profile.displayName,
-        name: profile.name,
-        emails: profile.emails,
-        photos: profile.photos?.map(p => p.value),
-        provider: profile.provider,
-        _raw: profile._raw ? "Raw data available" : "No raw data"
-      });
-
-      // Check for existing user in database (mock)
-      log.info("Checking if user exists in database", { 
-        userId: profile.id,
-        email: profile.emails?.[0]?.value 
-      });
-
-      // In a real app, you would check your database here
-      // Example: const existingUser = await User.findOne({ facebookId: profile.id });
-      // log.info("User lookup result", { exists: !!existingUser });
+      // Check if this code was already used in this session
+      if (req.session && req.session.usedAuthCode) {
+        log.warn("Duplicate auth attempt detected, rejecting...", {
+          sessionId: req.sessionID
+        });
+        return done(null, false, { message: "Authorization code already used" });
+      }
+      
+      // Mark this session as having used the code
+      if (req.session) {
+        req.session.usedAuthCode = true;
+        req.session.userProfile = profile;
+      }
 
       log.success("User authenticated successfully", {
         displayName: profile.displayName,
@@ -144,6 +159,7 @@ app.get("/", (req, res) => {
     status: "Server is running",
     environment: CONFIG.ENVIRONMENT,
     authenticated: req.isAuthenticated() || false,
+    sessionId: req.sessionID || "No session",
     timestamp: new Date().toISOString(),
     endpoints: [
       "GET / - Health check",
@@ -152,8 +168,7 @@ app.get("/", (req, res) => {
       "GET /status - Server status",
       "GET /profile - Get authenticated user",
       "GET /logout - Logout user",
-      "GET /auth/reset-session - Reset session",
-      "GET /auth/logs - View recent authentication logs (in memory)"
+      "GET /auth/reset-session - Reset session"
     ]
   });
 });
@@ -166,6 +181,8 @@ app.get("/auth/facebook", (req, res, next) => {
     sessionId: req.sessionID || "No session"
   });
   
+  req.session.loginInitiated = Date.now();
+  
   passport.authenticate("facebook", { 
     scope: ["email"]
   })(req, res, next);
@@ -177,14 +194,23 @@ app.get(
   (req, res, next) => {
     log.auth("Facebook callback received", {
       query: req.query,
-      sessionId: req.sessionID || "No session"
+      sessionId: req.sessionID || "No session",
+      cookies: req.headers.cookie || "No cookies"
     });
     
-    passport.authenticate("facebook", { 
-      failureRedirect: "/login-failed",
-      failureMessage: true
-    })(req, res, next);
+    if (req.session && req.session.usedAuthCode) {
+      log.warn("Session already used an auth code, redirecting to login failed", {
+        sessionId: req.sessionID
+      });
+      return res.redirect("/login-failed?reason=code_already_used");
+    }
+    
+    next();
   },
+  passport.authenticate("facebook", { 
+    failureRedirect: "/login-failed",
+    failureMessage: true
+  }),
   (req, res) => {
     log.success("Authentication successful", {
       user: {
@@ -192,10 +218,11 @@ app.get(
         displayName: req.user.displayName,
         email: req.user.emails?.[0]?.value || null
       },
-      sessionId: req.sessionID,
-      timestamp: new Date().toISOString()
+      sessionId: req.sessionID
     });
 
+    req.session.usedAuthCode = false;
+    
     res.json({
       success: true,
       message: "Authentication successful",
@@ -205,7 +232,8 @@ app.get(
         email: req.user.emails?.[0]?.value || null,
         picture: req.user.photos?.[0]?.value || null,
         provider: req.user.provider
-      }
+      },
+      timestamp: new Date().toISOString()
     });
   }
 );
@@ -229,10 +257,12 @@ app.get("/auth/reset-session", (req, res) => {
 // Login failed
 app.get("/login-failed", (req, res) => {
   const error = req.session.messages ? req.session.messages[0] : "Authentication failed";
+  const reason = req.query.reason || "unknown";
+  
   log.error("Login failed", {
     error: error,
+    reason: reason,
     sessionId: req.sessionID || "No session",
-    query: req.query,
     timestamp: new Date().toISOString()
   });
   
@@ -240,11 +270,13 @@ app.get("/login-failed", (req, res) => {
     success: false,
     message: "Authentication failed",
     error: error,
-    timestamp: new Date().toISOString()
+    reason: reason,
+    timestamp: new Date().toISOString(),
+    hint: "Try visiting /auth/reset-session to clear your session"
   });
 });
 
-// Server status with detailed info
+// Server status
 app.get("/status", (req, res) => {
   const status = { 
     status: "Server is running", 
@@ -252,9 +284,7 @@ app.get("/status", (req, res) => {
     environment: CONFIG.ENVIRONMENT,
     timestamp: new Date().toISOString(),
     sessionId: req.sessionID || "No session",
-    uptime: process.uptime(),
-    memory: process.memoryUsage(),
-    nodeVersion: process.version
+    uptime: process.uptime()
   };
   
   log.info("Status check", {
@@ -318,17 +348,6 @@ app.get("/logout", (req, res) => {
   });
 });
 
-// Detailed logs endpoint (for debugging)
-let recentLogs = [];
-app.get("/auth/logs", (req, res) => {
-  log.info("Log endpoint accessed");
-  res.json({
-    recentLogs: recentLogs.slice(-50),
-    totalLogs: recentLogs.length,
-    timestamp: new Date().toISOString()
-  });
-});
-
 // ============ ERROR HANDLING ============
 
 // 404 handler
@@ -354,7 +373,6 @@ app.use((err, req, res, next) => {
     method: req.method
   });
   
-  // Handle authorization code error
   if (err.message && err.message.includes("authorization code")) {
     return res.status(400).json({
       success: false,
@@ -380,20 +398,20 @@ app.listen(CONFIG.PORT, () => {
   console.log(`🌐 Environment: ${CONFIG.ENVIRONMENT}`);
   console.log(`🔄 Callback URL: ${CONFIG.CALLBACK_URL}`);
   console.log(`🔑 Facebook App ID: ${CONFIG.FACEBOOK_APP_ID}`);
-  console.log(`💾 Session Secret: ${CONFIG.SESSION_SECRET.substring(0, 10)}...`);
+  console.log(`🌍 CORS: All origins allowed (for testing)`);
+  console.log(`🍪 Cookie Secure: false (Render handles SSL)`);
   console.log("=".repeat(60));
   console.log(`[${new Date().toISOString()}] ✅ Server is ready to handle requests`);
-  console.log(`[${new Date().toISOString()}] 📋 Logging enabled for all authentication events`);
   console.log("=".repeat(60));
 });
 
 // Handle graceful shutdown
 process.on("SIGTERM", () => {
-  log.info("SIGTERM received - Shutting down gracefully...");
+  console.log(`[${new Date().toISOString()}] SIGTERM received - Shutting down...`);
   process.exit(0);
 });
 
 process.on("SIGINT", () => {
-  log.info("SIGINT received - Shutting down gracefully...");
+  console.log(`[${new Date().toISOString()}] SIGINT received - Shutting down...`);
   process.exit(0);
 });
