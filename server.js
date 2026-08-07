@@ -3,37 +3,39 @@ const session = require("express-session");
 const passport = require("passport");
 const FacebookStrategy = require("passport-facebook").Strategy;
 const cors = require("cors");
+const crypto = require("crypto");
 
 const app = express();
 
 // ============ CONFIGURATION ============
-// Updated for Render deployment
 const CONFIG = {
-  PORT: process.env.PORT || 4400,  // ← Render provides PORT
+  PORT: process.env.PORT || 4400,
   FACEBOOK_APP_ID: "1012373291541065",
   FACEBOOK_APP_SECRET: "9d3b82a3d291a386d7b10c30a1fcb010",
-  CALLBACK_URL: "https://facebook-auth-backend-1.onrender.com/auth/facebook/callback", // ← Updated to live URL
-  CLIENT_URL: "https://your-frontend-url.com", // ← Update when you have frontend
+  CALLBACK_URL: "https://facebook-auth-backend-1.onrender.com/auth/facebook/callback",
+  CLIENT_URL: "https://your-frontend-url.com",
   SESSION_SECRET: "9d3b82a3d291a386d7b10c30a1fcb010",
-  ENVIRONMENT: "production" // ← Changed to production
+  ENVIRONMENT: "production"
 };
 // ======================================
 
-// Middleware
+// ============ MIDDLEWARE ============
 app.use(cors({ 
   origin: CONFIG.CLIENT_URL, 
   credentials: true 
 }));
 
+// Session configuration with better production settings
 app.use(
   session({ 
     secret: CONFIG.SESSION_SECRET, 
-    resave: false, 
-    saveUninitialized: false,
+    resave: true,  // Changed to true
+    saveUninitialized: true,  // Changed to true
     cookie: {
-      secure: CONFIG.ENVIRONMENT === "production", // ← Now true for production
+      secure: true,  // Always true for HTTPS
       httpOnly: true,
-      maxAge: 24 * 60 * 60 * 1000 // 24 hours
+      maxAge: 24 * 60 * 60 * 1000,
+      sameSite: 'lax'  // Added for better security
     }
   })
 );
@@ -41,11 +43,18 @@ app.use(
 app.use(passport.initialize());
 app.use(passport.session());
 
-// Serialization
-passport.serializeUser((user, done) => done(null, user));
-passport.deserializeUser((obj, done) => done(null, obj));
+// ============ PASSPORT CONFIGURATION ============
+passport.serializeUser((user, done) => {
+  console.log("Serializing user:", user.id);
+  done(null, user);
+});
 
-// Facebook Strategy
+passport.deserializeUser((obj, done) => {
+  console.log("Deserializing user:", obj.id);
+  done(null, obj);
+});
+
+// Facebook Strategy with better error handling
 passport.use(
   new FacebookStrategy(
     {
@@ -53,11 +62,24 @@ passport.use(
       clientSecret: CONFIG.FACEBOOK_APP_SECRET,
       callbackURL: CONFIG.CALLBACK_URL,
       profileFields: ["id", "displayName", "emails", "picture.type(large)"],
+      passReqToCallback: true  // Allows access to request object
     },
-    (accessToken, refreshToken, profile, done) => {
-      console.log("Facebook user authenticated:", profile.displayName);
+    (req, accessToken, refreshToken, profile, done) => {
+      console.log("Facebook callback received for user:", profile.displayName);
       console.log("User ID:", profile.id);
       console.log("Email:", profile.emails?.[0]?.value || "No email provided");
+      
+      // Check if this code was already used (prevents duplicate processing)
+      if (req.session && req.session.usedAuthCode) {
+        console.log("Duplicate auth attempt detected, rejecting...");
+        return done(null, false, { message: "Authorization code already used" });
+      }
+      
+      // Mark this session as having used the code
+      if (req.session) {
+        req.session.usedAuthCode = true;
+      }
+      
       return done(null, profile);
     }
   )
@@ -70,30 +92,56 @@ app.get("/", (req, res) => {
   res.json({
     status: "Server is running",
     environment: CONFIG.ENVIRONMENT,
+    authenticated: req.isAuthenticated() || false,
     endpoints: [
       "GET / - Health check",
       "GET /auth/facebook - Initiate Facebook login",
       "GET /auth/facebook/callback - Facebook OAuth callback",
       "GET /status - Server status",
       "GET /profile - Get authenticated user",
-      "GET /logout - Logout user"
+      "GET /logout - Logout user",
+      "GET /auth/reset-session - Reset session"
     ]
   });
 });
 
-// Initiate Facebook login
-app.get("/auth/facebook", 
-  passport.authenticate("facebook", { scope: ["email"] })
-);
+// Initiate Facebook login with state parameter
+app.get("/auth/facebook", (req, res, next) => {
+  // Generate a random state for CSRF protection
+  const state = crypto.randomBytes(16).toString('hex');
+  req.session.oauthState = state;
+  
+  passport.authenticate("facebook", { 
+    scope: ["email"],
+    state: state
+  })(req, res, next);
+});
 
 // Facebook OAuth callback
 app.get(
   "/auth/facebook/callback",
-  passport.authenticate("facebook", { 
-    failureRedirect: "/login-failed",
-    failureMessage: true 
-  }),
+  (req, res, next) => {
+    // Verify state parameter to prevent CSRF
+    const state = req.query.state;
+    if (!state || state !== req.session.oauthState) {
+      console.log("State mismatch or missing");
+      return res.status(400).json({
+        success: false,
+        message: "Invalid state parameter. Please try again."
+      });
+    }
+    
+    // Clear the state to prevent reuse
+    delete req.session.oauthState;
+    
+    passport.authenticate("facebook", { 
+      failureRedirect: "/login-failed",
+      failureMessage: true
+    })(req, res, next);
+  },
   (req, res) => {
+    // Success response with user data
+    console.log("Authentication successful for:", req.user.displayName);
     res.json({
       success: true,
       message: "Authentication successful",
@@ -108,11 +156,32 @@ app.get(
   }
 );
 
+// Reset session - useful for clearing stuck sessions
+app.get("/auth/reset-session", (req, res) => {
+  req.session.destroy((err) => {
+    if (err) {
+      console.error("Session reset error:", err);
+      return res.status(500).json({ 
+        success: false, 
+        message: "Failed to reset session" 
+      });
+    }
+    res.json({ 
+      success: true, 
+      message: "Session reset successfully. You can try logging in again." 
+    });
+  });
+});
+
 // Login failed endpoint
 app.get("/login-failed", (req, res) => {
+  const error = req.session.messages ? req.session.messages[0] : "Unknown error";
+  console.log("Login failed:", error);
+  
   res.status(401).json({
     success: false,
-    message: "Authentication failed. Please try again."
+    message: "Authentication failed",
+    error: error
   });
 });
 
@@ -122,7 +191,8 @@ app.get("/status", (req, res) => {
     status: "Server is running", 
     authenticated: req.isAuthenticated() || false,
     environment: CONFIG.ENVIRONMENT,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    sessionId: req.sessionID || "No session"
   });
 });
 
@@ -149,8 +219,10 @@ app.get("/profile", (req, res) => {
 
 // Logout user
 app.get("/logout", (req, res) => {
+  console.log("Logging out user:", req.user?.displayName || "Unknown");
   req.logout((err) => {
     if (err) {
+      console.error("Logout error:", err);
       return res.status(500).json({ 
         success: false,
         message: "Logout failed" 
@@ -175,7 +247,16 @@ app.use((req, res) => {
 
 // Global error handler
 app.use((err, req, res, next) => {
-  console.error("Error:", err.stack);
+  console.error("Global error:", err.stack);
+  
+  // Check if this is the "authorization code used" error
+  if (err.message && err.message.includes("authorization code")) {
+    return res.status(400).json({
+      success: false,
+      message: "This authorization code has been used. Please try logging in again.",
+      hint: "Visit /auth/reset-session to reset your session"
+    });
+  }
   
   res.status(err.status || 500).json({
     success: false,
