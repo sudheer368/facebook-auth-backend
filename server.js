@@ -12,7 +12,7 @@ const CONFIG = {
   FACEBOOK_APP_ID: "1012373291541065",
   FACEBOOK_APP_SECRET: "9d3b82a3d291a386d7b10c30a1fcb010",
   CALLBACK_URL: "https://facebook-auth-backend-1.onrender.com/auth/facebook/callback",
-  CLIENT_URL: "*",  // Allow all origins for testing
+  CLIENT_URL: "*",
   SESSION_SECRET: "9d3b82a3d291a386d7b10c30a1fcb010",
   ENVIRONMENT: "production"
 };
@@ -49,7 +49,6 @@ const log = {
 // ============ TRACK USED CODES ============
 const usedCodes = new Map();
 
-// Clean up old codes every minute
 setInterval(() => {
   const now = Date.now();
   for (const [code, timestamp] of usedCodes.entries()) {
@@ -59,17 +58,15 @@ setInterval(() => {
   }
 }, 60000);
 
-// ============ LEAD STORAGE (In-Memory) ============
-// In production, use a database like MongoDB, PostgreSQL, etc.
+// ============ LEAD STORAGE ============
 const leadsDB = [];
 const requestsDB = [];
 const adsDB = [];
 
 // ============ MIDDLEWARE ============
-app.use(express.json()); // Parse JSON bodies
-app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// CORS configuration
 app.use(cors({ 
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
@@ -78,13 +75,11 @@ app.use(cors({
   credentials: true 
 }));
 
-// Request logging middleware
 app.use((req, res, next) => {
   log.request(req);
   next();
 });
 
-// Authentication middleware
 const isAuthenticated = (req, res, next) => {
   if (!req.isAuthenticated()) {
     log.warn("Unauthorized access attempt", {
@@ -137,7 +132,7 @@ passport.deserializeUser((obj, done) => {
   done(null, obj);
 });
 
-// Facebook Strategy with extended permissions
+// Facebook Strategy with ONLY valid default permissions
 passport.use(
   new FacebookStrategy(
     {
@@ -149,10 +144,7 @@ passport.use(
         "displayName", 
         "emails", 
         "picture.type(large)",
-        "name",
-        "gender",
-        "location",
-        "birthday"
+        "name"
       ],
       state: true,
       passReqToCallback: true
@@ -165,7 +157,6 @@ passport.use(
         sessionId: req.sessionID || "No session"
       });
 
-      // Check if this code was already used in this session
       if (req.session && req.session.usedAuthCode) {
         log.warn("Duplicate auth attempt detected, rejecting...", {
           sessionId: req.sessionID
@@ -173,10 +164,8 @@ passport.use(
         return done(null, false, { message: "Authorization code already used" });
       }
       
-      // Store access token for API calls
       req.session.facebookAccessToken = accessToken;
       
-      // Mark this session as having used the code
       if (req.session) {
         req.session.usedAuthCode = true;
         req.session.userProfile = profile;
@@ -232,9 +221,9 @@ app.get("/", (req, res) => {
   });
 });
 
-// Initiate Facebook login with extended permissions
+// Initiate Facebook login with ONLY valid default permissions
 app.get("/auth/facebook", (req, res, next) => {
-  log.auth("Initiating Facebook login with extended permissions", {
+  log.auth("Initiating Facebook login with default permissions", {
     userAgent: req.get('User-Agent'),
     ip: req.ip,
     sessionId: req.sessionID || "No session"
@@ -245,18 +234,8 @@ app.get("/auth/facebook", (req, res, next) => {
   passport.authenticate("facebook", { 
     scope: [
       "email",
-      "public_profile",
-      "user_gender",
-      "user_birthday",
-      "user_location",
-      "pages_show_list",
-      "pages_read_engagement",
-      "pages_manage_metadata",
-      "pages_manage_posts",
-      "ads_management",
-      "ads_read",
-      "leads_retrieval",
-      "business_management"
+      "public_profile"
+      // Only default permissions that work without App Review
     ]
   })(req, res, next);
 });
@@ -322,10 +301,7 @@ app.get(
         displayName: req.user.displayName,
         email: req.user.emails?.[0]?.value || null,
         picture: req.user.photos?.[0]?.value || null,
-        provider: req.user.provider,
-        name: req.user.name || null,
-        gender: req.user.gender || null,
-        location: req.user.location?.name || null
+        provider: req.user.provider
       },
       timestamp: new Date().toISOString()
     });
@@ -334,7 +310,6 @@ app.get(
 
 // ============ LEAD MANAGEMENT ============
 
-// Create a new lead
 app.post("/leads", isAuthenticated, (req, res) => {
   log.lead("Creating new lead", {
     user: req.user.displayName,
@@ -378,7 +353,6 @@ app.post("/leads", isAuthenticated, (req, res) => {
   });
 });
 
-// Get all leads
 app.get("/leads", isAuthenticated, (req, res) => {
   log.lead("Fetching all leads", {
     user: req.user.displayName,
@@ -393,23 +367,16 @@ app.get("/leads", isAuthenticated, (req, res) => {
   });
 });
 
-// Get a specific lead
 app.get("/leads/:id", isAuthenticated, (req, res) => {
   const lead = leadsDB.find(l => l.id === req.params.id);
   
   if (!lead) {
-    log.warn("Lead not found", { leadId: req.params.id });
     return res.status(404).json({
       success: false,
       message: "Lead not found",
       timestamp: new Date().toISOString()
     });
   }
-
-  log.lead("Fetching lead", {
-    leadId: lead.id,
-    leadName: lead.name
-  });
 
   res.json({
     success: true,
@@ -418,7 +385,6 @@ app.get("/leads/:id", isAuthenticated, (req, res) => {
   });
 });
 
-// Update a lead
 app.put("/leads/:id", isAuthenticated, (req, res) => {
   const leadIndex = leadsDB.findIndex(l => l.id === req.params.id);
   
@@ -443,11 +409,6 @@ app.put("/leads/:id", isAuthenticated, (req, res) => {
     updatedAt: new Date().toISOString()
   };
 
-  log.lead("Lead updated", {
-    leadId: leadsDB[leadIndex].id,
-    updatedBy: req.user.displayName
-  });
-
   res.json({
     success: true,
     message: "Lead updated successfully",
@@ -456,7 +417,6 @@ app.put("/leads/:id", isAuthenticated, (req, res) => {
   });
 });
 
-// Delete a lead
 app.delete("/leads/:id", isAuthenticated, (req, res) => {
   const leadIndex = leadsDB.findIndex(l => l.id === req.params.id);
   
@@ -471,12 +431,6 @@ app.delete("/leads/:id", isAuthenticated, (req, res) => {
   const deletedLead = leadsDB[leadIndex];
   leadsDB.splice(leadIndex, 1);
 
-  log.lead("Lead deleted", {
-    leadId: deletedLead.id,
-    leadName: deletedLead.name,
-    deletedBy: req.user.displayName
-  });
-
   res.json({
     success: true,
     message: "Lead deleted successfully",
@@ -487,12 +441,7 @@ app.delete("/leads/:id", isAuthenticated, (req, res) => {
 
 // ============ REQUEST MANAGEMENT ============
 
-// Create a new request
 app.post("/requests", isAuthenticated, (req, res) => {
-  log.info("Creating new request", {
-    user: req.user.displayName
-  });
-
   const { title, description, priority, type, assignedTo } = req.body;
   
   if (!title || !description) {
@@ -528,7 +477,6 @@ app.post("/requests", isAuthenticated, (req, res) => {
   });
 });
 
-// Get all requests
 app.get("/requests", isAuthenticated, (req, res) => {
   const { status, priority, type } = req.query;
   let filteredRequests = requestsDB;
@@ -552,7 +500,6 @@ app.get("/requests", isAuthenticated, (req, res) => {
   });
 });
 
-// Get a specific request
 app.get("/requests/:id", isAuthenticated, (req, res) => {
   const request = requestsDB.find(r => r.id === req.params.id);
   
@@ -570,7 +517,6 @@ app.get("/requests/:id", isAuthenticated, (req, res) => {
   });
 });
 
-// Update a request
 app.put("/requests/:id", isAuthenticated, (req, res) => {
   const requestIndex = requestsDB.findIndex(r => r.id === req.params.id);
   
@@ -602,7 +548,6 @@ app.put("/requests/:id", isAuthenticated, (req, res) => {
   });
 });
 
-// Delete a request
 app.delete("/requests/:id", isAuthenticated, (req, res) => {
   const requestIndex = requestsDB.findIndex(r => r.id === req.params.id);
   
@@ -626,12 +571,7 @@ app.delete("/requests/:id", isAuthenticated, (req, res) => {
 
 // ============ AD MANAGEMENT ============
 
-// Create a new ad
 app.post("/ads", isAuthenticated, (req, res) => {
-  log.ad("Creating new ad", {
-    user: req.user.displayName
-  });
-
   const { 
     name, 
     description, 
@@ -684,7 +624,6 @@ app.post("/ads", isAuthenticated, (req, res) => {
   });
 });
 
-// Get all ads
 app.get("/ads", isAuthenticated, (req, res) => {
   const { platform, status } = req.query;
   let filteredAds = adsDB;
@@ -696,7 +635,6 @@ app.get("/ads", isAuthenticated, (req, res) => {
     filteredAds = filteredAds.filter(a => a.status === status);
   }
 
-  // Calculate summary statistics
   const totalBudget = filteredAds.reduce((sum, ad) => sum + ad.budget, 0);
   const totalSpend = filteredAds.reduce((sum, ad) => sum + (ad.analytics?.spend || 0), 0);
   const totalImpressions = filteredAds.reduce((sum, ad) => sum + (ad.analytics?.impressions || 0), 0);
@@ -718,7 +656,6 @@ app.get("/ads", isAuthenticated, (req, res) => {
   });
 });
 
-// Get a specific ad
 app.get("/ads/:id", isAuthenticated, (req, res) => {
   const ad = adsDB.find(a => a.id === req.params.id);
   
@@ -736,7 +673,6 @@ app.get("/ads/:id", isAuthenticated, (req, res) => {
   });
 });
 
-// Update an ad
 app.put("/ads/:id", isAuthenticated, (req, res) => {
   const adIndex = adsDB.findIndex(a => a.id === req.params.id);
   
@@ -773,12 +709,6 @@ app.put("/ads/:id", isAuthenticated, (req, res) => {
     updatedAt: new Date().toISOString()
   };
 
-  log.ad("Ad updated", {
-    adId: adsDB[adIndex].id,
-    adName: adsDB[adIndex].name,
-    updatedBy: req.user.displayName
-  });
-
   res.json({
     success: true,
     message: "Ad updated successfully",
@@ -787,7 +717,6 @@ app.put("/ads/:id", isAuthenticated, (req, res) => {
   });
 });
 
-// Delete an ad
 app.delete("/ads/:id", isAuthenticated, (req, res) => {
   const adIndex = adsDB.findIndex(a => a.id === req.params.id);
   
@@ -801,12 +730,6 @@ app.delete("/ads/:id", isAuthenticated, (req, res) => {
   const deletedAd = adsDB[adIndex];
   adsDB.splice(adIndex, 1);
 
-  log.ad("Ad deleted", {
-    adId: deletedAd.id,
-    adName: deletedAd.name,
-    deletedBy: req.user.displayName
-  });
-
   res.json({
     success: true,
     message: "Ad deleted successfully",
@@ -815,9 +738,8 @@ app.delete("/ads/:id", isAuthenticated, (req, res) => {
   });
 });
 
-// ============ ADDITIONAL UTILITY ROUTES ============
+// ============ UTILITY ROUTES ============
 
-// Reset session
 app.get("/auth/reset-session", (req, res) => {
   log.info("Session reset requested", {
     sessionId: req.sessionID || "No session"
@@ -840,7 +762,6 @@ app.get("/auth/reset-session", (req, res) => {
   });
 });
 
-// Login failed
 app.get("/login-failed", (req, res) => {
   const error = req.session.messages ? req.session.messages[0] : "Authentication failed";
   const reason = req.query.reason || "unknown";
@@ -862,7 +783,6 @@ app.get("/login-failed", (req, res) => {
   });
 });
 
-// Server status
 app.get("/status", (req, res) => {
   const status = { 
     status: "Server is running", 
@@ -882,7 +802,6 @@ app.get("/status", (req, res) => {
   res.json(status);
 });
 
-// Get authenticated user profile
 app.get("/profile", isAuthenticated, (req, res) => {
   log.info("Profile accessed", {
     userId: req.user.id,
@@ -897,16 +816,12 @@ app.get("/profile", isAuthenticated, (req, res) => {
       displayName: req.user.displayName,
       email: req.user.emails?.[0]?.value || null,
       picture: req.user.photos?.[0]?.value || null,
-      provider: req.user.provider,
-      name: req.user.name || null,
-      gender: req.user.gender || null,
-      location: req.user.location?.name || null
+      provider: req.user.provider
     },
     timestamp: new Date().toISOString()
   });
 });
 
-// Logout
 app.get("/logout", (req, res) => {
   log.info("Logout requested", {
     user: req.user?.displayName || "Unknown",
@@ -939,7 +854,6 @@ app.get("/logout", (req, res) => {
 
 // ============ ERROR HANDLING ============
 
-// 404 handler
 app.use((req, res) => {
   log.warn("Route not found", {
     method: req.method,
@@ -954,7 +868,6 @@ app.use((req, res) => {
   });
 });
 
-// Global error handler
 app.use((err, req, res, next) => {
   log.error("Global error", {
     error: err.message,
@@ -988,9 +901,7 @@ app.listen(CONFIG.PORT, () => {
   console.log(`🌐 Environment: ${CONFIG.ENVIRONMENT}`);
   console.log(`🔄 Callback URL: ${CONFIG.CALLBACK_URL}`);
   console.log(`🔑 Facebook App ID: ${CONFIG.FACEBOOK_APP_ID}`);
-  console.log(`🌍 CORS: All origins allowed`);
-  console.log(`🍪 Cookie Secure: false (Render handles SSL)`);
-  console.log(`🛡️  Duplicate code prevention: Enabled`);
+  console.log(`📋 Permissions: email, public_profile (default)`);
   console.log(`👤 Lead Management: Enabled`);
   console.log(`📋 Request Management: Enabled`);
   console.log(`📢 Ad Management: Enabled`);
@@ -999,7 +910,6 @@ app.listen(CONFIG.PORT, () => {
   console.log("=".repeat(60));
 });
 
-// Handle graceful shutdown
 process.on("SIGTERM", () => {
   console.log(`[${new Date().toISOString()}] SIGTERM received - Shutting down...`);
   process.exit(0);
