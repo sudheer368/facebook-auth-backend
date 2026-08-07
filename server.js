@@ -7,15 +7,15 @@ const cors = require("cors");
 const app = express();
 
 // ============ CONFIGURATION ============
-// Update these values for your deployment
+// Updated for Render deployment
 const CONFIG = {
-  PORT: 4400,
+  PORT: process.env.PORT || 4400,  // ← Render provides PORT
   FACEBOOK_APP_ID: "1012373291541065",
   FACEBOOK_APP_SECRET: "9d3b82a3d291a386d7b10c30a1fcb010",
-  CALLBACK_URL: "http://localhost:4400/auth/facebook/callback",
-  CLIENT_URL: "http://localhost:3000",
+  CALLBACK_URL: "https://facebook-auth-backend-1.onrender.com/auth/facebook/callback", // ← Updated to live URL
+  CLIENT_URL: "https://your-frontend-url.com", // ← Update when you have frontend
   SESSION_SECRET: "9d3b82a3d291a386d7b10c30a1fcb010",
-  ENVIRONMENT: "development" // change to "production" for deployment
+  ENVIRONMENT: "production" // ← Changed to production
 };
 // ======================================
 
@@ -31,7 +31,7 @@ app.use(
     resave: false, 
     saveUninitialized: false,
     cookie: {
-      secure: CONFIG.ENVIRONMENT === "production",
+      secure: CONFIG.ENVIRONMENT === "production", // ← Now true for production
       httpOnly: true,
       maxAge: 24 * 60 * 60 * 1000 // 24 hours
     }
@@ -55,14 +55,9 @@ passport.use(
       profileFields: ["id", "displayName", "emails", "picture.type(large)"],
     },
     (accessToken, refreshToken, profile, done) => {
-      // Here you can save user to database
       console.log("Facebook user authenticated:", profile.displayName);
       console.log("User ID:", profile.id);
       console.log("Email:", profile.emails?.[0]?.value || "No email provided");
-      
-      // You can add database save logic here
-      // Example: saveUserToDatabase(profile);
-      
       return done(null, profile);
     }
   )
@@ -81,8 +76,7 @@ app.get("/", (req, res) => {
       "GET /auth/facebook/callback - Facebook OAuth callback",
       "GET /status - Server status",
       "GET /profile - Get authenticated user",
-      "GET /logout - Logout user",
-      "GET /users - List all users (if implemented)"
+      "GET /logout - Logout user"
     ]
   });
 });
@@ -100,7 +94,6 @@ app.get(
     failureMessage: true 
   }),
   (req, res) => {
-    // Send user data as JSON response
     res.json({
       success: true,
       message: "Authentication successful",
@@ -196,7 +189,7 @@ app.listen(CONFIG.PORT, () => {
   console.log("=".repeat(50));
   console.log("🚀 Facebook Authentication Server");
   console.log("=".repeat(50));
-  console.log(`📡 Server running on: http://localhost:${CONFIG.PORT}`);
+  console.log(`📡 Server running on port: ${CONFIG.PORT}`);
   console.log(`🌐 Environment: ${CONFIG.ENVIRONMENT}`);
   console.log(`🔑 Facebook App ID: ${CONFIG.FACEBOOK_APP_ID}`);
   console.log(`📱 Client URL: ${CONFIG.CLIENT_URL}`);
