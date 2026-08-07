@@ -9,11 +9,11 @@ const app = express();
 // ============ CONFIGURATION ============
 const CONFIG = {
   PORT: process.env.PORT || 4400,
-  FACEBOOK_APP_ID: "9116274981816330",
-  FACEBOOK_APP_SECRET: "fbe58a947395d69b31564b7973530596",
+  FACEBOOK_APP_ID: "1536401354834595",
+  FACEBOOK_APP_SECRET: "a5b7554ec5de6cfc360c197dc34f208b",
   CALLBACK_URL: "https://facebook-auth-backend-1.onrender.com/auth/facebook/callback",
   CLIENT_URL: "*",  // Allow all origins for testing
-  SESSION_SECRET: "fbe58a947395d69b31564b7973530596",
+  SESSION_SECRET: "a5b7554ec5de6cfc360c197dc34f208b",
   ENVIRONMENT: "production"
 };
 // ======================================
