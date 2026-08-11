@@ -160,15 +160,15 @@ async function sendNotification(appName, leadDetails = null) {
   const notificationUrl = "https://notifications-5xky4wiyxa-uc.a.run.app/send-notification";
   
   let notificationBody = `New Facebook lead from ${appName}`;
-  if (leadDetails && leadDetails.name) {
-    notificationBody += `\n👤 ${leadDetails.name}`;
-  }
-  if (leadDetails && leadDetails.phone) {
-    notificationBody += `\n📱 ${leadDetails.phone}`;
-  }
-  if (leadDetails && leadDetails.spaceType) {
-    notificationBody += `\n🏠 ${leadDetails.spaceType}`;
-  }
+  // if (leadDetails && leadDetails.name) {
+  //   notificationBody += `\n👤 ${leadDetails.name}`;
+  // }
+  // if (leadDetails && leadDetails.phone) {
+  //   notificationBody += `\n📱 ${leadDetails.phone}`;
+  // }
+  // if (leadDetails && leadDetails.spaceType) {
+  //   notificationBody += `\n🏠 ${leadDetails.spaceType}`;
+  // }
   
   const payload = {
     title: `New Lead from ${appName}`,
