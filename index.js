@@ -30,7 +30,7 @@ const facebookApps = [
     verifyToken: "Chinni@143",
     name: "sudheer_demo",
     numberId: "8",
-    companyid: "1312u234u35u",
+    companyid: "XxzeBoDcqsaB0gApMfySELG6c5a2",
   },
 ];
 
