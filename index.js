@@ -38,6 +38,17 @@ const facebookApps = [
 
 console.log(`📋 Loaded ${facebookApps.length} Facebook app(s)`);
 
+// ---------------- HELPER: Get field with or without trailing ? ----------------
+function getField(fields, ...possibleNames) {
+  for (const name of possibleNames) {
+    if (fields[name] !== undefined && fields[name] !== "") return fields[name];
+    if (fields[name + "?"] !== undefined && fields[name + "?"] !== "") return fields[name + "?"];
+    const withoutQ = name.replace(/\?$/, "");
+    if (fields[withoutQ] !== undefined && fields[withoutQ] !== "") return fields[withoutQ];
+  }
+  return "";
+}
+
 // ---------------- HELPER FUNCTIONS ----------------
 async function fetchWithRetry(url, retries = 2) {
   for (let i = 0; i <= retries; i++) {
@@ -87,7 +98,6 @@ async function enrichLeadData(leadId, token) {
           `https://graph.facebook.com/v18.0/${lead.form_id}?fields=name&access_token=${token}`
         );
         formName = form?.name || null;
-        console.log(`[enrichLeadData] Form name: ${formName}`);
       } catch (err) {
         console.error(`[enrichLeadData] Error fetching form: ${err.message}`);
       }
@@ -99,7 +109,6 @@ async function enrichLeadData(leadId, token) {
           `https://graph.facebook.com/v18.0/${lead.ad_id}?fields=name&access_token=${token}`
         );
         adName = ad?.name || null;
-        console.log(`[enrichLeadData] Ad name: ${adName}`);
       } catch (err) {
         console.error(`[enrichLeadData] Error fetching ad: ${err.message}`);
       }
@@ -111,7 +120,6 @@ async function enrichLeadData(leadId, token) {
           `https://graph.facebook.com/v18.0/${lead.adset_id}?fields=name&access_token=${token}`
         );
         adsetName = adset?.name || null;
-        console.log(`[enrichLeadData] Adset name: ${adsetName}`);
       } catch (err) {
         console.error(`[enrichLeadData] Error fetching adset: ${err.message}`);
       }
@@ -123,22 +131,18 @@ async function enrichLeadData(leadId, token) {
           `https://graph.facebook.com/v18.0/${lead.campaign_id}?fields=name&access_token=${token}`
         );
         campaignName = campaign?.name || null;
-        console.log(`[enrichLeadData] Campaign name: ${campaignName}`);
       } catch (err) {
         console.error(`[enrichLeadData] Error fetching campaign: ${err.message}`);
       }
     }
 
-    const enrichedData = {
+    return {
       ...lead,
       adName,
       adsetName,
       campaignName,
       formName,
     };
-
-    console.log(`[enrichLeadData] Enriched data for lead: ${leadId}`);
-    return enrichedData;
   } catch (error) {
     console.error(`[enrichLeadData] Critical error for lead ${leadId}:`, error.message);
     if (error.response) {
@@ -149,7 +153,7 @@ async function enrichLeadData(leadId, token) {
   }
 }
 
-// ---------------- NOTIFICATION FUNCTION (FIXED) ----------------
+// ---------------- NOTIFICATION FUNCTION ----------------
 async function sendNotification(appName, leadDetails = null, companyId) {
   const notificationUrl =
     "https://us-central1-kiran-interior-b7e9c.cloudfunctions.net/Interiorleadsnotification/send-notification";
@@ -187,7 +191,7 @@ async function sendNotification(appName, leadDetails = null, companyId) {
   }
 }
 
-// ---------------- CALL NOW FUNCTION (FIXED) ----------------
+// ---------------- CALL NOW FUNCTION ----------------
 async function callNow(numberId, appName, companyId) {
   if (!numberId || numberId === "0" || numberId === "8") {
     log(`[${appName}] ⚠️ No valid numberId provided, skipping call`);
@@ -286,48 +290,36 @@ facebookApps.forEach((appConfig) => {
   // RECEIVE ENDPOINT
   app.post(`/webhook/${appConfig.name}`, async (req, res) => {
     console.log(`[${appConfig.name}] 📩 Webhook POST received`);
-    console.log(`[${appConfig.name}] Request headers:`, req.headers);
     console.log(`[${appConfig.name}] Request body preview:`, JSON.stringify(req.body, null, 2));
 
-    // Immediately return 200 to acknowledge receipt
+    // Immediately return 200
     res.sendStatus(200);
 
     let mappedFields = null;
-    let phoneNumber = null;
-    let responseData = null;
 
     try {
-      // Extract lead ID
       const entry = req.body?.entry?.[0];
       const change = entry?.changes?.[0];
       const value = change?.value;
       const leadId = value?.leadgen_id || value?.lead_id || entry?.id;
 
-      if (!leadId) {
-        log(`[${appConfig.name}] No lead ID found in request`);
-        console.log(`[${appConfig.name}] Full request body:`, JSON.stringify(req.body, null, 2));
-        return;
-      }
-
       if (!leadId || String(leadId).length < 5) {
-        log(`[${appConfig.name}] ⚠️ Invalid lead ID format: ${leadId}`);
+        log(`[${appConfig.name}] No valid lead ID found`);
         return;
       }
 
       log(`[${appConfig.name}] Processing lead: ${leadId}`);
 
-      // Fetch and enrich lead data
       const data = await enrichLeadData(leadId, appConfig.accessToken);
 
       if (!data || !data.id) {
-        log(`[${appConfig.name}] ❌ Failed to fetch valid lead data for ID: ${leadId}`);
-        console.log(`[${appConfig.name}] Enriched data result:`, JSON.stringify(data, null, 2));
+        log(`[${appConfig.name}] ❌ Failed to fetch lead data for ID: ${leadId}`);
         return;
       }
 
       log(`[${appConfig.name}] ✅ Successfully fetched lead data for: ${data.id}`);
 
-      // Extract field data
+      // Extract raw fields from Facebook
       const fields = {};
       if (Array.isArray(data.field_data)) {
         data.field_data.forEach((f) => {
@@ -335,13 +327,46 @@ facebookApps.forEach((appConfig) => {
         });
       }
 
-      console.log(`[${appConfig.name}] Extracted fields:`, Object.keys(fields));
+      console.log(`[${appConfig.name}] Raw Facebook fields:`, JSON.stringify(fields, null, 2));
 
-      // Map all fields
+      // ============ FIXED MAPPING (handles trailing ?) ============
+      const spaceType = getField(
+        fields,
+        "what_type_of_space_do_you_need_interior_for_",
+        "what_type_of_space_do_you_need_interior_for_?",
+        "space_type",
+        "spaceType"
+      );
+
+      const timeline = getField(
+        fields,
+        "when_are_you_planning_to_start_the_work_",
+        "when_are_you_planning_to_start_the_work_?",
+        "timeline",
+        "start_time"
+      );
+
+      const budget = getField(
+        fields,
+        "what_is_your_estimated_budget_for_interiors_",
+        "what_is_your_estimated_budget_for_interiors_?",
+        "budget",
+        "estimated_budget"
+      );
+
+      const fullName = getField(fields, "full_name", "name", "customer_name");
+      const phone = getField(fields, "phone_number", "phone", "mobile_number");
+      const email = getField(fields, "email", "email_address");
+      const city = getField(fields, "city", "city_name");
+      const postCode = getField(fields, "post_code", "zip_code", "postal_code");
+      const message = getField(fields, "message", "comments", "additional_info");
+
+      // Main createdTime from Facebook
+      const createdTime = data.created_time || new Date().toISOString();
+
       mappedFields = {
         id: data.id,
-        created_time: data.created_time || new Date().toISOString(),
-
+        created_time: createdTime,
         ad_id: data.ad_id || null,
         ad_name: data.adName || null,
         adset_id: data.adset_id || null,
@@ -352,45 +377,42 @@ facebookApps.forEach((appConfig) => {
         form_name: data.formName || null,
         is_organic: data.is_organic || null,
         platform: "Facebook",
-
-        email: fields.email || fields.email_address || "",
-        full_name: fields.full_name || fields.name || fields.customer_name || "",
-        phone_number: fields.phone_number || fields.phone || fields.mobile_number || "",
-        phone_number_verified: fields.phone_number_verified || "false",
-
-        city: fields.city || fields.city_name || "",
-        post_code: fields.post_code || fields.zip_code || fields.postal_code || "",
-
-        what_type_of_space_do_you_need_interior_for_:
-          fields.what_type_of_space_do_you_need_interior_for_ || fields.space_type || "",
-        when_are_you_planning_to_start_the_work_:
-          fields.when_are_you_planning_to_start_the_work_ || fields.start_time || fields.timeline || "",
-        what_is_your_estimated_budget_for_interiors_:
-          fields.what_is_your_estimated_budget_for_interiors_ || fields.budget || fields.estimated_budget || "",
-
-        message: fields.message || fields.comments || fields.additional_info || "",
+        email,
+        full_name: fullName,
+        phone_number: phone,
+        city,
+        post_code: postCode,
+        spaceType,
+        timeline,
+        budget,
+        message,
         source: "Facebook",
         status: "new",
-        all_fields: fields,
       };
 
-      phoneNumber = mappedFields.phone_number;
+      console.log(
+        `[${appConfig.name}] Mapped → spaceType: "${spaceType}", timeline: "${timeline}", budget: "${budget}", createdTime: "${createdTime}"`
+      );
 
-      // Prepare payload for Interior Hub API
+      // ============ CLEAN PAYLOAD (createdTime is main field, no metaData) ============
       const payload = {
         companyId: appConfig.companyid,
 
-        name: mappedFields.full_name,
-        phone: mappedFields.phone_number,
-        email: mappedFields.email,
+        // Contact
+        name: fullName,
+        phone: phone,
+        email: email,
 
-        city: mappedFields.city,
-        postCode: mappedFields.post_code,
+        // Location
+        city: city,
+        postCode: postCode,
 
-        spaceType: mappedFields.what_type_of_space_do_you_need_interior_for_,
-        timeline: mappedFields.when_are_you_planning_to_start_the_work_,
-        budget: mappedFields.what_is_your_estimated_budget_for_interiors_,
+        // Interior specific
+        spaceType: spaceType,
+        timeline: timeline,
+        budget: budget,
 
+        // Facebook details
         source: "Facebook",
         campaign: mappedFields.campaign_name,
         campaignId: mappedFields.campaign_id,
@@ -401,36 +423,18 @@ facebookApps.forEach((appConfig) => {
         formName: mappedFields.form_name,
         formId: mappedFields.form_id,
         leadId: mappedFields.id,
-        createdTime: mappedFields.created_time,
+
+        // ===== MAIN createdTime =====
+        createdTime: createdTime,
+
         isOrganic: mappedFields.is_organic,
-        platform: mappedFields.platform,
-        phoneVerified: mappedFields.phone_number_verified,
-
+        platform: "Facebook",
+        phoneVerified: "false",
         status: "new",
-        message: mappedFields.message,
-
-        metaData: {
-          ad_id: mappedFields.ad_id,
-          ad_name: mappedFields.ad_name,
-          adset_id: mappedFields.adset_id,
-          adset_name: mappedFields.adset_name,
-          campaign_id: mappedFields.campaign_id,
-          campaign_name: mappedFields.campaign_name,
-          form_id: mappedFields.form_id,
-          form_name: mappedFields.form_name,
-          is_organic: mappedFields.is_organic,
-          facebookAppName: appConfig.name,
-          phone_number_verified: mappedFields.phone_number_verified,
-          city: mappedFields.city,
-          post_code: mappedFields.post_code,
-          space_type: mappedFields.what_type_of_space_do_you_need_interior_for_,
-          timeline: mappedFields.when_are_you_planning_to_start_the_work_,
-          budget: mappedFields.what_is_your_estimated_budget_for_interiors_,
-          all_fields: mappedFields.all_fields,
-        },
+        message: message,
       };
 
-      console.log(`[${appConfig.name}] 📤 Sending payload to Interior Hub API`);
+      console.log(`[${appConfig.name}] 📤 Final payload:`, JSON.stringify(payload, null, 2));
 
       // Save to Interior Hub API
       const apiUrl =
@@ -442,38 +446,29 @@ facebookApps.forEach((appConfig) => {
           timeout: 15000,
         });
 
-        responseData = response.data;
-        log(`[${appConfig.name}] ✅ Lead saved to Interior Hub API: ${responseData?.id || "success"}`);
+        const responseData = response.data;
+        log(`[${appConfig.name}] ✅ Lead saved: ${responseData?.id || "success"}`);
         console.log(`[${appConfig.name}] API Response:`, JSON.stringify(responseData, null, 2));
 
-        // Trigger voice call if phone number exists
-        if (phoneNumber && phoneNumber.length > 5) {
-          console.log(`[${appConfig.name}] 📞 Triggering voice call for ${phoneNumber}`);
-
-          const voiceResult = await triggerVoiceCall(
-            phoneNumber,
+        // Voice call
+        if (phone && phone.length > 5) {
+          console.log(`[${appConfig.name}] 📞 Triggering voice call for ${phone}`);
+          await triggerVoiceCall(
+            phone,
             {
-              name: payload.name,
-              email: payload.email,
-              city: payload.city,
-              spaceType: payload.spaceType,
-              timeline: payload.timeline,
-              budget: payload.budget,
-              campaign: payload.campaign,
-              ad: payload.ad,
-              formName: payload.formName,
+              name: fullName,
+              email,
+              city,
+              spaceType,
+              timeline,
+              budget,
+              campaign: mappedFields.campaign_name,
+              ad: mappedFields.ad_name,
+              formName: mappedFields.form_name,
             },
             appConfig.companyid,
             responseData?.id || ""
           );
-
-          if (voiceResult) {
-            log(`[${appConfig.name}] ✅ Voice call successful for ${phoneNumber}`);
-          } else {
-            log(`[${appConfig.name}] ⚠️ Voice call failed for ${phoneNumber}`);
-          }
-        } else {
-          log(`[${appConfig.name}] ⚠️ No valid phone number found, skipping voice call`);
         }
       } catch (err) {
         log(`[${appConfig.name}] ❌ API save failed: ${err.message}`);
@@ -481,21 +476,23 @@ facebookApps.forEach((appConfig) => {
           console.error(`[${appConfig.name}] API Status: ${err.response.status}`);
           console.error(`[${appConfig.name}] API Data:`, JSON.stringify(err.response.data, null, 2));
         }
-        // Continue – we still want to send notification
       }
 
-      // ========== ALWAYS SEND NOTIFICATION (even if lead save failed) ==========
+      // Always send notification
       await sendNotification(
         appConfig.name,
         {
-          name: mappedFields.full_name,
-          phone: mappedFields.phone_number,
-          spaceType: mappedFields.what_type_of_space_do_you_need_interior_for_,
+          name: fullName,
+          phone: phone,
+          postCode: postCode,
+          timeline: timeline,
+          budget: budget,
+          spaceType: spaceType,
         },
         appConfig.companyid
       );
 
-      // Trigger call now (don't await)
+      // Call now (background)
       callNow(appConfig.numberId, appConfig.name, appConfig.companyid).catch((err) => {
         log(`[${appConfig.name}] Background call failed: ${err.message}`);
       });
@@ -503,14 +500,16 @@ facebookApps.forEach((appConfig) => {
       log(`[${appConfig.name}] ❌ Error processing webhook: ${e.message}`);
       console.error(`[${appConfig.name}] Error stack:`, e.stack);
 
-      // Even on unexpected errors, try to send a basic notification if we have some data
       if (mappedFields) {
         await sendNotification(
           appConfig.name,
           {
             name: mappedFields.full_name,
             phone: mappedFields.phone_number,
-            spaceType: mappedFields.what_type_of_space_do_you_need_interior_for_,
+            postCode: mappedFields.post_code,
+            timeline: mappedFields.timeline,
+            budget: mappedFields.budget,
+            spaceType: mappedFields.spaceType,
           },
           appConfig.companyid
         );
@@ -519,42 +518,32 @@ facebookApps.forEach((appConfig) => {
   });
 });
 
-// ---------------- HEALTH CHECK ENDPOINT ----------------
+// ---------------- HEALTH CHECK ----------------
 app.get("/health", (req, res) => {
   res.status(200).json({
     status: "healthy",
     apps: facebookApps.map((a) => a.name),
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    memory: process.memoryUsage(),
-    environment: process.env.NODE_ENV || "development",
   });
 });
 
 app.get("/", (req, res) => {
   res.status(200).json({
     message: "Facebook Webhook Server is running",
-    version: "1.1.0",
+    version: "1.3.0",
     endpoints: {
       health: "/health",
       webhooks: facebookApps.map((a) => `/webhook/${a.name}`),
     },
-    apps: facebookApps.map((a) => ({
-      name: a.name,
-      companyId: a.companyid,
-      webhookUrl: `/webhook/${a.name}`,
-    })),
     timestamp: new Date().toISOString(),
   });
 });
 
-// ---------------- ERROR HANDLING MIDDLEWARE ----------------
+// ---------------- ERROR HANDLING ----------------
 app.use((err, req, res, next) => {
   console.error("Global error handler:", err);
-  res.status(500).json({
-    error: "Internal server error",
-    message: err.message,
-  });
+  res.status(500).json({ error: "Internal server error", message: err.message });
 });
 
 // ---------------- RUN SERVER ----------------
@@ -562,42 +551,22 @@ const PORT = process.env.PORT || 3000;
 const server = app.listen(PORT, () => {
   console.log(`\n========================================`);
   console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`========================================`);
-  console.log(`📋 Webhook endpoints:`);
-  facebookApps.forEach((a) => {
-    console.log(`   GET/POST /webhook/${a.name}`);
-  });
-  console.log(`✅ Health check: /health`);
-  console.log(`📝 Logs being written to: ${LOG_FILE}`);
-  console.log(`========================================`);
-  console.log(`📍 Server URL: http://localhost:${PORT}`);
-  console.log(`🔗 Webhook URL: https://your-domain.com/webhook/${facebookApps[0].name}`);
+  console.log(`📋 Webhook: /webhook/${facebookApps[0].name}`);
+  console.log(`✅ Health: /health`);
   console.log(`========================================\n`);
 });
 
-// ---------------- GRACEFUL SHUTDOWN ----------------
+// Graceful shutdown
 process.on("SIGTERM", () => {
-  console.log("📴 Received SIGTERM, shutting down gracefully...");
-  server.close(() => {
-    console.log("📴 Server closed");
-    process.exit(0);
-  });
+  server.close(() => process.exit(0));
 });
-
 process.on("SIGINT", () => {
-  console.log("\n📴 Received SIGINT, shutting down gracefully...");
-  server.close(() => {
-    console.log("📴 Server closed");
-    process.exit(0);
-  });
+  server.close(() => process.exit(0));
 });
 
-// ---------------- UNHANDLED REJECTION / EXCEPTION ----------------
-process.on("unhandledRejection", (reason, promise) => {
-  console.error("Unhandled Rejection at:", promise);
-  console.error("Reason:", reason);
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled Rejection:", reason);
 });
-
 process.on("uncaughtException", (error) => {
   console.error("Uncaught Exception:", error);
 });
