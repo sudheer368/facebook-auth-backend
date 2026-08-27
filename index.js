@@ -156,71 +156,28 @@ async function enrichLeadData(leadId, token) {
 }
 
 // ---------------- NOTIFICATION FUNCTION ----------------
-async function sendNotification(appConfig, leadDetails = null) {
-  // FIX 1: Use appConfig object directly instead of appName string
-  // FIX 2: Use the correct companyId from appConfig
-  // FIX 3: Build a proper notification payload with all required fields
-  
+async function sendNotification(appConfig, leadDetails = null) {  // Accepts appConfig object
   const notificationUrl = "https://us-central1-kiran-interior-b7e9c.cloudfunctions.net/Interiorleadsnotification/send-notification";
   
-  // Use companyId from appConfig
+  // Use appConfig directly (not a string)
   const companyId = appConfig.companyid;
   const appName = appConfig.name;
   
-  // Build notification title
+  // Build notification title and message
   const title = `New Lead from ${appName}`;
-  
-  // Build notification message with lead details
   let message = `New Facebook lead from ${appName}`;
   
   if (leadDetails) {
-    // Add name if available
-    if (leadDetails.name && leadDetails.name.trim()) {
-      message += `\n👤 Name: ${leadDetails.name}`;
-    }
-    
-    // Add phone if available
-    if (leadDetails.phone && leadDetails.phone.trim()) {
-      message += `\n📱 Phone: ${leadDetails.phone}`;
-    }
-    
-    // Add email if available
-    if (leadDetails.email && leadDetails.email.trim()) {
-      message += `\n✉️ Email: ${leadDetails.email}`;
-    }
-    
-    // Add city if available
-    if (leadDetails.city && leadDetails.city.trim()) {
-      message += `\n📍 City: ${leadDetails.city}`;
-    }
-    
-    // Add space type if available
-    if (leadDetails.spaceType && leadDetails.spaceType.trim()) {
-      message += `\n🏠 Space Type: ${leadDetails.spaceType}`;
-    }
-    
-    // Add timeline if available
-    if (leadDetails.timeline && leadDetails.timeline.trim()) {
-      message += `\n📅 Timeline: ${leadDetails.timeline}`;
-    }
-    
-    // Add budget if available
-    if (leadDetails.budget && leadDetails.budget.trim()) {
-      message += `\n💰 Budget: ${leadDetails.budget}`;
-    }
-    
-    // Add campaign if available
-    if (leadDetails.campaign && leadDetails.campaign.trim()) {
-      message += `\n📊 Campaign: ${leadDetails.campaign}`;
-    }
+    if (leadDetails.name) message += `\n👤 Name: ${leadDetails.name}`;
+    if (leadDetails.phone) message += `\n📱 Phone: ${leadDetails.phone}`;
+    if (leadDetails.spaceType) message += `\n🏠 Space: ${leadDetails.spaceType}`;
   }
   
-  // Build the complete payload
+  // Build the complete payload with companyId
   const payload = {
-    companyId: companyId,
+    companyId: companyId,  // This is now included
     title: title,
     message: message,
-    // Add additional metadata that might be useful
     timestamp: new Date().toISOString(),
     appName: appName,
     leadDetails: leadDetails || {}
@@ -244,7 +201,6 @@ async function sendNotification(appConfig, leadDetails = null) {
       console.error(`[${appName}] Response status: ${err.response.status}`);
       console.error(`[${appName}] Response data:`, JSON.stringify(err.response.data, null, 2));
     }
-    // Don't throw - just log the error and continue
     return null;
   }
 }
