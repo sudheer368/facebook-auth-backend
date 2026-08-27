@@ -157,8 +157,9 @@ async function enrichLeadData(leadId, token) {
 
 // ---------------- NOTIFICATION FUNCTION ----------------
 async function sendNotification(appName, leadDetails = null) {
-  const notificationUrl = "https://notifications-5xky4wiyxa-uc.a.run.app/send-notification";
-  
+  // 1. Get tokens from your Cloud Function
+  const notificationUrl = `https://us-central1-kiran-interior-b7e9c.cloudfunctions.net/Interiorleadsnotification/users?companyId=${appConfig.companyid}`;
+
   let notificationBody = `New Facebook lead from ${appName}`;
   // if (leadDetails && leadDetails.name) {
   //   notificationBody += `\n👤 ${leadDetails.name}`;
@@ -169,15 +170,50 @@ async function sendNotification(appName, leadDetails = null) {
   // if (leadDetails && leadDetails.spaceType) {
   //   notificationBody += `\n🏠 ${leadDetails.spaceType}`;
   // }
-  
+
   const payload = {
-    title: `New Lead from ${appName}`,
-    body: notificationBody,
+    notification: {
+      title: `New Lead from ${appName}`,
+      body: notificationBody,
+    },
   };
-  
+
   try {
-    await axios.post(notificationUrl, payload, { timeout: 10000 });
-    log(`[${appName}] Notification sent`);
+    // Step 1: Get the list of tokens
+    const response = await axios.get(notificationUrl, { timeout: 10000 });
+    const tokens = response.data.tokens || [];
+
+    if (tokens.length === 0) {
+      log(`[${appName}] No tokens found to send notification`);
+      return;
+    }
+
+    log(`[${appName}] Found ${tokens.length} tokens. Sending notifications...`);
+
+    // Step 2: Send notification to all tokens
+    const results = await Promise.allSettled(
+      tokens.map((token) =>
+        axios.post(
+          "https://fcm.googleapis.com/fcm/send",
+          {
+            to: token,
+            ...payload,
+          },
+          {
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `key=${appConfig.fcmServerKey}`, // ← Add your FCM Server Key
+            },
+            timeout: 10000,
+          }
+        )
+      )
+    );
+
+    const successCount = results.filter((r) => r.status === "fulfilled").length;
+    const failCount = results.filter((r) => r.status === "rejected").length;
+
+    log(`[${appName}] Notification sent → Success: ${successCount}, Failed: ${failCount}`);
   } catch (err) {
     log(`[${appName}] Notification failed: ${err.message}`);
   }
@@ -191,7 +227,7 @@ async function callNow(numberId, appName) {
   }
 
   try {
-    const callUrl = `https://attendance-5xky4wiyxa-uc.a.run.app/callNow/${numberId}`;
+    const callUrl = `https://settingsapi-5xky4wiyxa-uc.a.run.app/get-settings/${appConfig.companyid}/${numberId}`;
     const response = await axios.get(callUrl, { timeout: 10000 });
     log(`[${appName}] 📞 CallNow triggered successfully for ${numberId}`);
     return response.data;
@@ -593,3 +629,10 @@ process.on('unhandledRejection', (reason, promise) => {
 process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
 });
+
+
+
+
+
+
+
