@@ -66,7 +66,6 @@ async function fetchWithRetry(url, retries = 2) {
 // ---------------- GET ACCESS TOKEN FOR FCM ----------------
 async function getAccessToken() {
   try {
-    // Using Google Application Default Credentials
     const { GoogleAuth } = require('google-auth-library');
     const auth = new GoogleAuth({
       scopes: ['https://www.googleapis.com/auth/firebase.messaging'],
@@ -76,7 +75,6 @@ async function getAccessToken() {
     return accessToken.token;
   } catch (error) {
     console.error('Error getting access token:', error.message);
-    // Fallback: Try to use service account directly
     try {
       const serviceAccount = require('./service-account-key.json');
       const { JWT } = require('google-auth-library');
@@ -106,13 +104,12 @@ async function getDeviceTokens(companyId) {
   }
 }
 
-// ---------------- NOTIFICATION FUNCTION (FIXED) ----------------
+// ---------------- NOTIFICATION FUNCTION ----------------
 async function sendNotification(appConfig, leadData) {
   const appName = appConfig.name;
   const companyId = appConfig.companyid;
 
   try {
-    // 1. Get device tokens
     const tokens = await getDeviceTokens(companyId);
     
     if (!tokens || tokens.length === 0) {
@@ -122,7 +119,6 @@ async function sendNotification(appConfig, leadData) {
 
     log(`[${appName}] Found ${tokens.length} tokens. Sending notifications...`);
 
-    // 2. Get Access Token for FCM
     let accessToken;
     try {
       accessToken = await getAccessToken();
@@ -131,16 +127,13 @@ async function sendNotification(appConfig, leadData) {
       return;
     }
 
-    // 3. Prepare notification message
     const notificationTitle = `New Lead from ${appName}`;
     const notificationBody = leadData?.name 
       ? `New lead from ${leadData.name}` 
       : `New Facebook lead from ${appName}`;
 
-    // 4. Send notification to all tokens
     const results = await Promise.allSettled(
       tokens.map((token) => {
-        // Skip invalid tokens
         if (!token || token.length < 10) {
           log(`[${appName}] ⚠️ Skipping invalid token: ${token}`);
           return Promise.resolve({ status: 'fulfilled', skipped: true });
@@ -194,7 +187,6 @@ async function sendNotification(appConfig, leadData) {
 
     log(`[${appName}] Notification results → Success: ${successCount}, Failed: ${failCount}, Skipped: ${skippedCount}`);
 
-    // Log individual failures for debugging
     results.forEach((result, index) => {
       if (result.status === "rejected") {
         const token = tokens[index] || 'unknown';
@@ -305,7 +297,6 @@ async function enrichLeadData(leadId, token) {
     let campaignName = null;
     let formName = null;
 
-    // Fetch form name if available
     if (lead.form_id) {
       try {
         const form = await fetchWithRetry(
@@ -318,7 +309,6 @@ async function enrichLeadData(leadId, token) {
       }
     }
 
-    // Fetch ad name if available
     if (lead.ad_id) {
       try {
         const ad = await fetchWithRetry(
@@ -331,7 +321,6 @@ async function enrichLeadData(leadId, token) {
       }
     }
 
-    // Fetch adset name if available
     if (lead.adset_id) {
       try {
         const adset = await fetchWithRetry(
@@ -344,7 +333,6 @@ async function enrichLeadData(leadId, token) {
       }
     }
 
-    // Fetch campaign name if available
     if (lead.campaign_id) {
       try {
         const campaign = await fetchWithRetry(
@@ -382,7 +370,6 @@ async function enrichLeadData(leadId, token) {
 facebookApps.forEach((appConfig) => {
   console.log(`✅ Setting up webhook for: ${appConfig.name}`);
   
-  // VERIFY ENDPOINT
   app.get(`/webhook/${appConfig.name}`, (req, res) => {
     const mode = req.query["hub.mode"];
     const token = req.query["hub.verify_token"];
@@ -400,17 +387,14 @@ facebookApps.forEach((appConfig) => {
     }
   });
 
-  // RECEIVE ENDPOINT
   app.post(`/webhook/${appConfig.name}`, async (req, res) => {
     console.log(`[${appConfig.name}] 📩 Webhook POST received`);
     console.log(`[${appConfig.name}] Request headers:`, req.headers);
     console.log(`[${appConfig.name}] Request body preview:`, JSON.stringify(req.body, null, 2));
     
-    // Immediately return 200 to acknowledge receipt
     res.sendStatus(200);
 
     try {
-      // Extract lead ID from various possible locations in the payload
       const entry = req.body?.entry?.[0];
       const change = entry?.changes?.[0];
       const value = change?.value;
@@ -422,7 +406,6 @@ facebookApps.forEach((appConfig) => {
         return;
       }
 
-      // Validate lead ID format - Facebook lead IDs are typically long numbers
       if (!leadId || leadId.length < 5) {
         log(`[${appConfig.name}] ⚠️ Invalid lead ID format: ${leadId}`);
         return;
@@ -430,7 +413,6 @@ facebookApps.forEach((appConfig) => {
 
       log(`[${appConfig.name}] Processing lead: ${leadId}`);
 
-      // Fetch and enrich lead data
       const data = await enrichLeadData(leadId, appConfig.accessToken);
 
       if (!data || !data.id) {
@@ -441,7 +423,6 @@ facebookApps.forEach((appConfig) => {
 
       log(`[${appConfig.name}] ✅ Successfully fetched lead data for: ${data.id}`);
 
-      // Extract field data from Facebook response
       const fields = {};
       if (Array.isArray(data.field_data)) {
         data.field_data.forEach((f) => {
@@ -451,13 +432,9 @@ facebookApps.forEach((appConfig) => {
 
       console.log(`[${appConfig.name}] Extracted fields:`, Object.keys(fields));
 
-      // Map all fields with proper naming
       const mappedFields = {
-        // Basic fields
         id: data.id,
         created_time: data.created_time || new Date().toISOString(),
-        
-        // Facebook Ad Campaign fields
         ad_id: data.ad_id || null,
         ad_name: data.adName || null,
         adset_id: data.adset_id || null,
@@ -468,53 +445,33 @@ facebookApps.forEach((appConfig) => {
         form_name: data.formName || null,
         is_organic: data.is_organic || null,
         platform: "Facebook",
-        
-        // Contact Information
         email: fields.email || fields.email_address || "",
         full_name: fields.full_name || fields.name || fields.customer_name || "",
         phone_number: fields.phone_number || fields.phone || fields.mobile_number || "",
         phone_number_verified: fields.phone_number_verified || "false",
-        
-        // Location
         city: fields.city || fields.city_name || "",
         post_code: fields.post_code || fields.zip_code || fields.postal_code || "",
-        
-        // Interior Design Specific Fields
         what_type_of_space_do_you_need_interior_for_: fields.what_type_of_space_do_you_need_interior_for_ || fields.space_type || "",
         when_are_you_planning_to_start_the_work_: fields.when_are_you_planning_to_start_the_work_ || fields.start_time || fields.timeline || "",
         what_is_your_estimated_budget_for_interiors_: fields.what_is_your_estimated_budget_for_interiors_ || fields.budget || fields.estimated_budget || "",
-        
-        // Additional fields
         message: fields.message || fields.comments || fields.additional_info || "",
         source: "Facebook",
         status: "new",
-        
-        // Store all fields as raw data
         all_fields: fields
       };
 
-      // Get phone number for voice call
       const phoneNumber = mappedFields.phone_number;
 
-      // Prepare payload for the API
       const payload = {
         companyId: appConfig.companyid,
-        
-        // Contact Information
         name: mappedFields.full_name,
         phone: mappedFields.phone_number,
         email: mappedFields.email,
-        
-        // Location
         city: mappedFields.city,
         postCode: mappedFields.post_code,
-        
-        // Interior Design Specific Fields
         spaceType: mappedFields.what_type_of_space_do_you_need_interior_for_,
         timeline: mappedFields.when_are_you_planning_to_start_the_work_,
         budget: mappedFields.what_is_your_estimated_budget_for_interiors_,
-        
-        // Facebook Campaign Details
         source: "Facebook",
         campaign: mappedFields.campaign_name,
         campaignId: mappedFields.campaign_id,
@@ -529,14 +486,8 @@ facebookApps.forEach((appConfig) => {
         isOrganic: mappedFields.is_organic,
         platform: mappedFields.platform,
         phoneVerified: mappedFields.phone_number_verified,
-        
-        // Status
         status: "new",
-        
-        // Message
         message: mappedFields.message,
-        
-        // Complete metadata
         metaData: {
           ad_id: mappedFields.ad_id,
           ad_name: mappedFields.ad_name,
@@ -560,7 +511,6 @@ facebookApps.forEach((appConfig) => {
 
       console.log(`[${appConfig.name}] 📤 Sending payload to Interior Hub API`);
 
-      // Save to Interior Hub API
       const apiUrl = "https://us-central1-kiran-interior-b7e9c.cloudfunctions.net/interiorhubleads/leads";
 
       let savedLeadId = null;
@@ -578,7 +528,6 @@ facebookApps.forEach((appConfig) => {
         log(`[${appConfig.name}] ✅ Lead saved to Interior Hub API: ${savedLeadId || "success"}`);
         console.log(`[${appConfig.name}] API Response:`, JSON.stringify(responseData, null, 2));
 
-        // Trigger voice call if phone number exists
         if (phoneNumber && phoneNumber.length > 5) {
           console.log(`[${appConfig.name}] 📞 Triggering voice call for ${phoneNumber}`);
           
@@ -608,7 +557,6 @@ facebookApps.forEach((appConfig) => {
           log(`[${appConfig.name}] ⚠️ No valid phone number found, skipping voice call`);
         }
 
-        // Send notification with lead data
         const leadDataForNotification = {
           name: payload.name,
           phone: payload.phone,
@@ -625,7 +573,6 @@ facebookApps.forEach((appConfig) => {
         
         await sendNotification(appConfig, leadDataForNotification);
 
-        // Trigger call now (don't await)
         callNow(appConfig, leadDataForNotification).catch((err) => {
           log(`[${appConfig.name}] Background call failed: ${err.message}`);
         });
@@ -637,7 +584,6 @@ facebookApps.forEach((appConfig) => {
           console.error(`[${appConfig.name}] API Data:`, JSON.stringify(err.response.data, null, 2));
         }
         
-        // Try to send notification even if API save fails
         try {
           const leadDataForNotification = {
             name: payload.name,
