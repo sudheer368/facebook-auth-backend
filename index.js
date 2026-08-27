@@ -157,7 +157,7 @@ async function enrichLeadData(leadId, token) {
 
 // ---------------- NOTIFICATION FUNCTION ----------------
 async function sendNotification(appName, leadDetails = null) {
-  const notificationUrl = `https://us-central1-kiran-interior-b7e9c.cloudfunctions.net/Interiorleadsnotification/users?companyId=${appConfig.companyid}`;
+  const notificationUrl = "https://notifications-5xky4wiyxa-uc.a.run.app/send-notification";
   
   let notificationBody = `New Facebook lead from ${appName}`;
   // if (leadDetails && leadDetails.name) {
@@ -593,10 +593,3 @@ process.on('unhandledRejection', (reason, promise) => {
 process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
 });
-
-
-
-
-
-
-
