@@ -1,9 +1,0 @@
-node_modules/
-.env
-*.log
-service-account-key.json
-*.pem
-.DS_Store
-.vscode/
-.idea/
-webhook_log.txt
