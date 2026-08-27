@@ -160,7 +160,7 @@ async function sendNotification(appName, leadDetails = null, companyId) {
     companyId: finalCompanyId,
     title: `📢 New Lead from ${appName}`,
     message: leadDetails
-      ? `New Facebook lead from ${appName}: Name: ${leadDetails.name || "N/A"}, Phone: ${leadDetails.phone || "N/A"}, Space: ${leadDetails.spaceType || "N/A"}`
+      ? `New Facebook lead from ${appName}: pincode: ${leadDetails.postCode || "N/A"}, sttus: ${leadDetails.when_are_you_planning_to_start_the_work_ || "N/A"}, price: ${leadDetails.budget || "N/A"}`
       : `New Facebook lead from ${appName}`,
   };
 
