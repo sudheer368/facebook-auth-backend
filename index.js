@@ -156,32 +156,99 @@ async function enrichLeadData(leadId, token) {
 }
 
 // ---------------- NOTIFICATION FUNCTION ----------------
-async function sendNotification(appName, leadDetails = null) {
-  const notificationUrl = "https://notifications-5xky4wiyxa-uc.a.run.app/send-notification";
+async function sendNotification(appConfig, leadDetails = null) {
+  // FIX 1: Use appConfig object directly instead of appName string
+  // FIX 2: Use the correct companyId from appConfig
+  // FIX 3: Build a proper notification payload with all required fields
   
-  let notificationBody = `New Facebook lead from ${appName}`;
-  // if (leadDetails && leadDetails.name) {
-  //   notificationBody += `\n👤 ${leadDetails.name}`;
-  // }
-  // if (leadDetails && leadDetails.phone) {
-  //   notificationBody += `\n📱 ${leadDetails.phone}`;
-  // }
-  // if (leadDetails && leadDetails.spaceType) {
-  //   notificationBody += `\n🏠 ${leadDetails.spaceType}`;
-  // }
+  const notificationUrl = "https://us-central1-kiran-interior-b7e9c.cloudfunctions.net/Interiorleadsnotification/send-notification";
   
+  // Use companyId from appConfig
+  const companyId = appConfig.companyid;
+  const appName = appConfig.name;
+  
+  // Build notification title
+  const title = `New Lead from ${appName}`;
+  
+  // Build notification message with lead details
+  let message = `New Facebook lead from ${appName}`;
+  
+  if (leadDetails) {
+    // Add name if available
+    if (leadDetails.name && leadDetails.name.trim()) {
+      message += `\n👤 Name: ${leadDetails.name}`;
+    }
+    
+    // Add phone if available
+    if (leadDetails.phone && leadDetails.phone.trim()) {
+      message += `\n📱 Phone: ${leadDetails.phone}`;
+    }
+    
+    // Add email if available
+    if (leadDetails.email && leadDetails.email.trim()) {
+      message += `\n✉️ Email: ${leadDetails.email}`;
+    }
+    
+    // Add city if available
+    if (leadDetails.city && leadDetails.city.trim()) {
+      message += `\n📍 City: ${leadDetails.city}`;
+    }
+    
+    // Add space type if available
+    if (leadDetails.spaceType && leadDetails.spaceType.trim()) {
+      message += `\n🏠 Space Type: ${leadDetails.spaceType}`;
+    }
+    
+    // Add timeline if available
+    if (leadDetails.timeline && leadDetails.timeline.trim()) {
+      message += `\n📅 Timeline: ${leadDetails.timeline}`;
+    }
+    
+    // Add budget if available
+    if (leadDetails.budget && leadDetails.budget.trim()) {
+      message += `\n💰 Budget: ${leadDetails.budget}`;
+    }
+    
+    // Add campaign if available
+    if (leadDetails.campaign && leadDetails.campaign.trim()) {
+      message += `\n📊 Campaign: ${leadDetails.campaign}`;
+    }
+  }
+  
+  // Build the complete payload
   const payload = {
-    title: `New Lead from ${appName}`,
-    body: notificationBody,
+    companyId: companyId,
+    title: title,
+    message: message,
+    // Add additional metadata that might be useful
+    timestamp: new Date().toISOString(),
+    appName: appName,
+    leadDetails: leadDetails || {}
   };
   
+  console.log(`[${appName}] 📨 Sending notification payload:`, JSON.stringify(payload, null, 2));
+  
   try {
-    await axios.post(notificationUrl, payload, { timeout: 10000 });
-    log(`[${appName}] Notification sent`);
+    const response = await axios.post(notificationUrl, payload, { 
+      timeout: 10000,
+      headers: {
+        'Content-Type': 'application/json',
+      }
+    });
+    console.log(`[${appName}] ✅ Notification sent successfully`);
+    console.log(`[${appName}] Notification response:`, JSON.stringify(response.data, null, 2));
+    return response.data;
   } catch (err) {
-    log(`[${appName}] Notification failed: ${err.message}`);
+    console.error(`[${appName}] ❌ Notification failed: ${err.message}`);
+    if (err.response) {
+      console.error(`[${appName}] Response status: ${err.response.status}`);
+      console.error(`[${appName}] Response data:`, JSON.stringify(err.response.data, null, 2));
+    }
+    // Don't throw - just log the error and continue
+    return null;
   }
 }
+
 
 // ---------------- CALL NOW FUNCTION ----------------
 async function callNow(numberId, appName) {
