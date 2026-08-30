@@ -162,9 +162,9 @@ async function sendNotification(appName, leadDetails = null, companyId) {
 
   const payload = {
     companyId: finalCompanyId,
-    title: `📢 New Lead from ${appName}`,
+    title: `📢 📢 New Lead from ${appName} ${leadDetails.fullName}`,
     message: leadDetails
-      ? `New Facebook lead from ${appName}: pincode: ${leadDetails.postCode || "N/A"}, sttus: ${leadDetails.when_are_you_planning_to_start_the_work_ || "N/A"}, price: ${leadDetails.budget || "N/A"}`
+      ? `pincode: ${leadDetails.postCode || "N/A"}, sttus: ${leadDetails.when_are_you_planning_to_start_the_work_ || "N/A"}, price: ${leadDetails.budget || "N/A"}`
       : `New Facebook lead from ${appName}`,
   };
 
